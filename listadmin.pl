@@ -1,7 +1,8 @@
 #! /local/bin/perl5
 #
-# listadmin version 2.12
-# Written 2003 by Kjetil Torgrim Homme <kjetilho@ifi.uio.no>
+# listadmin version 2.13
+# Written 2003, 2004 by
+# Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
 
 use HTML::TokeParser;
@@ -13,6 +14,11 @@ use Term::ReadLine;
 use IO::Handle;
 use strict;
 
+sub usage {
+    print STDERR "Usage: $0 [-f CONFIGFILE] [listname]\n";
+    exit (64);
+}
+
 my $term;
 my $ua = new LWP::UserAgent ("timeout" => 600);
 my $rc = $ENV{"HOME"}."/.listadmin.ini";
@@ -22,16 +28,28 @@ upgrade_config($oldconf, $rc);
 if (@ARGV >= 2 && $ARGV[0] eq "-f") {
     shift; $rc = shift;
 }
-if (@ARGV != 0) {
-    print STDERR "Usage: $0 [-f CONFIGFILE]\n";
-    exit (64);
-}
+usage if (@ARGV > 1);
 
 my $config = read_config ($rc);
 
 unless ($config) {
     exit (0) unless prompt_for_config ($rc);
     $config = read_config ($rc);
+}
+
+my @lists = ();
+if (@ARGV) {
+    if (defined $config->{$ARGV[0]}) {
+	push @lists, $ARGV[0];
+    } else {
+	@lists = sort config_order grep { /$ARGV[0]/o } keys %{$config}
+    }
+    if (@lists == 0) {
+	print STDERR "$ARGV[0]: no matching list\n";
+	usage();
+    }
+} else {
+    @lists = sort config_order keys %{$config}
 }
 
 my ($from, $subject, $reason, $spamscore);
@@ -48,8 +66,7 @@ Reason:  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  Spam? @<<
 .
 
 
-for my $list (sort {$config->{$a}{"order"} <=> $config->{$b}{"order"}}
-	           keys %{$config}) {
+for my $list (@lists) {
     my $user = $config->{$list}{"user"};
     my $pw = $config->{$list}{"password"};
 
@@ -885,4 +902,8 @@ sub prompt {
     $term = new Term::ReadLine 'listadmin'
 	    unless $term;
     return ($term->readline (@_));
+}
+
+sub config_order {
+    $config->{$a}{order} <=> $config->{$b}{order};
 }
