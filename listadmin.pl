@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.16
+# listadmin version 2.17
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -11,27 +11,35 @@ use MIME::Base64;
 use MIME::QuotedPrint;
 use Data::Dumper;
 use Term::ReadLine;
-use IO::Handle;
+use Getopt::Std;
 use strict;
 
+my $rc = $ENV{"HOME"}."/.listadmin.ini";
+my $oldconf = $ENV{"HOME"}."/.listconf";
+
 sub usage {
-    print STDERR "Usage: $0 [-f CONFIGFILE] [listname]\n";
+    print STDERR <<_end_;
+Usage: $0 [-f CONFIGFILE] [-t MINUTES] [LISTNAME]
+  -f CONFIGFILE    Read configuration from CONFIGFILE.
+                   (default: $rc)
+  -t MINUTES       Stop processing after MINUTES minutes.  Decimals are
+                   allowed
+  LISTNAME         Only process lists with name matching LISTNAME
+_end_
     exit (64);
 }
 
 my $term;
 my $ua = new LWP::UserAgent ("timeout" => 600);
-my $rc = $ENV{"HOME"}."/.listadmin.ini";
-my $oldconf = $ENV{"HOME"}."/.listconf";
 upgrade_config($oldconf, $rc);
 
-if (@ARGV >= 2 && $ARGV[0] eq "-f") {
-    shift; $rc = shift;
-}
-usage if (@ARGV > 1);
+our ($opt_f, $opt_t, $opt_n);
+
+usage unless getopts('f:t:');
+$rc = $opt_f if $opt_f;
+my $time_limit = time + 60 * ($opt_t || 24*60);
 
 my $config = read_config ($rc);
-
 unless ($config) {
     exit (0) unless prompt_for_config ($rc);
     $config = read_config ($rc);
@@ -70,6 +78,10 @@ for my $list (@lists) {
     my $user = $config->{$list}{"user"};
     my $pw = $config->{$list}{"password"};
 
+    if (time > $time_limit) {
+	print "Time's up, skipping the remaining lists\n";
+	last;
+    }
     print "fetching data for $list\n";
     my $info = get_list ($list, $config->{$list}{"adminurl"}, $user, $pw);
     my %change = ();
@@ -119,6 +131,7 @@ sub process_subscriptions {
 
  subscr_loop:
     for my $id (sort keys %subscribers) {
+	last if time > $time_limit;
 	++$num;
 	print "\n[$num/$count] ======= \#$id of $list =======\n";
 	print "From:    $subscribers{$id}\n";
@@ -176,9 +189,10 @@ sub approve_messages {
     my @num_to_id = grep { ! /^global$/ } sort keys %{$info};
  msgloop:
     while ($num < $count) {
+	last if time > $time_limit;
 	my $id = $num_to_id[$num++];
 	$from = $info->{$id}{"from"};
-	$subject = $info->{$id}{"subject"};
+	$subject = $info->{$id}{"subject"} || "";
 	$reason = $info->{$id}{"reason"};
 	$spamscore = $info->{$id}{"spamscore"};
 	print "\n[$num/$count] ======= \#$id of $list =======\n";
@@ -417,7 +431,6 @@ sub parse_approvals {
 
 # NB! lossy!
 sub utf8_to_latin1 {
-    my $self = shift;
     my ($s) = @_;
     $s =~ s/([\x80-\xff][\x80-\xbf]*)/&utf8_to_latin1_char($1)/ge;
     return $s;
@@ -828,11 +841,14 @@ sub commit_changes {
     for my $id (keys %{$change}) {
 	my ($what, $text) = @{$change->{$id}};
 	$url .= "&$id=" . $action->{$what};
-	$log .= sprintf ("%s D:[%s] F:[%s] S:[%s]\n",
-			 $what,
-			 $msgs->{$id}{"date"},
-			 $msgs->{$id}{"from"},
-			 $msgs->{$id}{"subject"});
+	unless ($what =~ /^s[ar]$/) {
+	    # we don't log subscription approval or rejects
+	    $log .= sprintf ("%s D:[%s] F:[%s] S:[%s]\n",
+			     $what,
+			     $msgs->{$id}{"date"},
+			     $msgs->{$id}{"from"},
+			     $msgs->{$id}{"subject"});
+	}
 	if ($what eq "r") {
 	    $text =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
 	    $url .= "&comment-$id=$text";
@@ -855,6 +871,12 @@ sub commit_changes {
 	    $url = $baseurl;
 	    $log = log_timestamp ($list);
 	    $changes = 0;
+	    # even if time has run out, we will always submit at least
+	    # one batch of data.
+	    if (time > $time_limit) {
+		print "Time's up, won't submit the other changes\n";
+		last;
+	    }
 	}
     }
     submit_http ($url, $log, $logfile)
