@@ -21,9 +21,22 @@ listadmin.txt: listadmin.man
 	env TERM=dumb nroff -man $< | sed 's/.//g' | uniq > $@.tmp
 	mv $@.tmp $@
 
-dist: listadmin.txt
+TARFILE = listadmin-$(VERSION).tar.gz
+$(TARFILE): $(SRCFILES) listadmin.txt
 	@rm -rf listadmin-$(VERSION)
-	mkdir -p listadmin-$(VERSION)
+	mkdir listadmin-$(VERSION)
 	cp $(SRCFILES) listadmin.txt listadmin-$(VERSION)/
-	tar cf - listadmin-$(VERSION) | gzip -9 > listadmin-$(VERSION).tar.gz
+	tar cf - listadmin-$(VERSION) | gzip -9 > $(TARFILE)
 	rm -rf listadmin-$(VERSION)
+
+dist: $(TARFILE)
+
+distclean:
+	rm -rf $(TARFILE) listadmin.txt listadmin-$(VERSION)
+
+# for my use only
+WWW_DOCS = /hom/kjetilho/www_docs/hacks
+publish: dist
+	cp listadmin.txt $(WWW_DOCS)/listadmin.txt
+	cp $(TARFILE) $(WWW_DOCS)/
+	perl -pi -e 's/listadmin-\d+\.\d+/listadmin-'$(VERSION)'/g' $(WWW_DOCS)/index.html
