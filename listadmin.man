@@ -1,0 +1,93 @@
+.TH LISTADMIN 1 "20 Jun 2003"
+
+.SH NAME
+listadmin \- process messages held by Mailman for approval
+
+.SH SYNOPSIS
+.B "listadmin [-f \fIconfigfile\fP]"
+
+.SH DESCRIPTION
+.I listadmin
+is a textual alternative to Mailman's WWW interface for administering
+mailing lists.
+
+.SH OPTIONS
+.IP "-f \fIconfigfile\fP"
+Fetch list of mailing lists from \fIconfigfile\fP rather than the
+default.
+
+.SH CONFIGURATION
+The configuration file contains lines which can contain either a
+comment, a directive, or a mailing list address.
+.PP
+A line can be continued by putting a backslash character at the end of
+the line.
+.PP
+Comments begin with the character # and extend to the end of line.
+Backslash continuation is not applied to comments.
+.PP
+Directives have effect for all following mailing lists.  The argument
+to the directive can be put in double quotes to protect any space
+characters in it.  Inside double quotes, \\" can be used to include a \""
+literal double quote, and \\\\ for a literal backslash.  The
+directives are:
+.RS
+.IP "username \fIusername\fP"
+Specifies the username to use for authentication.
+.IP "password \fIpassword\fP"
+Specifies the password to use for authentication.
+.IP "default \fIaction\fP"
+Specifies the action to take when the user presses just Return.
+Available actions are:
+.RS
+.IP "approve"
+The message will be sent to all member of the list.
+.IP "reject"
+Notify sender that the message was rejected.
+.IP "discard"
+Throw message away, don't notify sender.
+.IP "skip"
+Don't decide now, leave it for later.
+.IP "none"
+Reset to no default action.
+.RE
+.IP "action \fIaction\fP"
+This action will be taken \fBalways\fP for all messages in the
+relevant lists, no user interaction will take place.  The same actions
+as for \fIdefault\fP are available, although reject and skip aren't
+very useful.
+.IP "spamlevel \fInumber\fP"
+This specifies the threshold for automatic discard of suspected spam
+messages.  12 is unlikely to have false positives.  No user
+confirmation is needed, so it is best to play it safe.  Less than 5 is
+not recommended.
+.IP "confirm \fIyes|no\fP"
+Before submitting changes, ask for confirmation.  Default is "yes".
+.IP "log \fIfilename\fP"
+Changes submitted to the web interface are logged.  All the changes
+for one list are sent simultaneously.  The format in the log is first
+a line containing the list name and a time stamp in local time.  Then
+one line for each message, on the format
+.IP
+\fIaction\fP D:[\fIdate\fP] F:[\fIsender\fP] S:[\fIsubject\fP]
+.IP
+This batch of lines are terminated by a line saying \fBchanges sent to
+server\fP.
+.IP
+The filename \fBnone\fP turns off logging.
+.RE
+
+.SH FILES
+.IP
+\fB$HOME/.listadmin.ini\fP
+.PP
+The default configuration file.
+
+.SH BUGS
+The HTML parser is very fragile and depends on Mailman not to change
+the format of its generated code.
+
+.SH AUTHOR
+Kjetil T. Homme <kjetilho@ifi.uio.no>
+.br
+Send bug reports or feature requests to postmaster@uio.no
