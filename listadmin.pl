@@ -1,6 +1,6 @@
 #! /local/bin/perl5
 #
-# listadmin version 2.09
+# listadmin version 2.10
 # Written 2003 by Kjetil Torgrim Homme <kjetilho@ifi.uio.no>
 # Released into public domain.
 
@@ -283,10 +283,13 @@ sub get_list {
 
     my $resp = $ua->get (mailman_url ($list, $user, $pw));
     $page = $resp->content;
-    if (open (DUMP, ">/tmp/dump-$list.html")) {
+
+    # save it for eased debug for the developer...
+    if ($< == 1232 && open (DUMP, ">/tmp/dump-$list.html")) {
 	print DUMP $page;
 	close (DUMP);
     }
+
     unless ($resp->is_success) {
 	print STDERR $resp->error_as_HTML;
 	return ();
@@ -300,19 +303,21 @@ sub get_list {
 		"Unable to log in. Is your username and password correct?\n";
 	return ();
     }
+    my $mmver;
 
     $parse->get_tag ("hr");
     $parse->get_tag ("h2") || return ();
     my $headline = $parse->get_trimmed_text ("/h2") || die;
     if ($headline =~ /subscription/i) {
 	parse_subscriptions ($parse, \%data);
+    } elsif ($headline =~ /held for approval/i) {
+	$mmver = parse_approvals ($parse, \%data);
     } else {
 	$parse->get_tag ("hr") || die;
-    }
-    my $mmver;
-    my $token = $parse->get_token;
-    if ($token->[0] eq "S" && lc ($token->[1]) eq "center") {
-	$mmver = parse_approvals ($parse, \%data);
+	my $token = $parse->get_token;
+	if ($token->[0] eq "S" && lc ($token->[1]) eq "center") {
+	    $mmver = parse_approvals ($parse, \%data);
+	}
     }
     return () unless parse_footer ($parse, \%data, $mmver);
     return (\%data);
