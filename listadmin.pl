@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.21
+# listadmin version 2.22
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -33,7 +33,7 @@ my $term;
 my $ua = new LWP::UserAgent ("timeout" => 600);
 upgrade_config($oldconf, $rc);
 
-our ($opt_f, $opt_t, $opt_n);
+our ($opt_f, $opt_t);
 
 usage() unless getopts('f:t:');
 $rc = $opt_f if $opt_f;
@@ -313,15 +313,22 @@ end
     }
 }
 
+sub url_quote_parameter {
+    my $param = shift;
+    $param =~ s/(\W)/sprintf ("%%%02x", ord ($1))/ge;
+    $param;
+}
 
 sub mailman_url {
     my ($list, $pattern, $user, $pw) = @_;
 
-    my $args = "username=$user";
-    if (defined $pw) {
-	$pw =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
-	$args .= "&adminpw=$pw";
-    }
+    my @params = ();
+    push (@params, "username=" . url_quote_parameter ($user))
+	    if defined $user;
+    push (@params, "adminpw=". url_quote_parameter ($pw))
+	    if defined $pw;
+    my $args = join ("&", @params);
+
     my ($lp, $domain) = split ('@', $list);
     if ($pattern) {
 	my $url = $pattern;
