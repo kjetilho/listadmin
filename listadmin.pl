@@ -1,6 +1,6 @@
 #! /local/bin/perl5
 #
-# listadmin version 2.06
+# listadmin version 2.07
 # Written 2003 by Kjetil Torgrim Homme <kjetilho@ifi.uio.no>
 # Released into public domain.
 
@@ -54,6 +54,11 @@ for my $list (sort {$config->{$a}{"order"} <=> $config->{$b}{"order"}}
     my $spamlevel = $config->{$list}{"spamlevel"};
     my $user = $config->{$list}{"user"};
     my $pw = $config->{$list}{"password"};
+    my $ns_from = $config->{$list}{"not_spam_if_from"};
+    my $ns_subj = $config->{$list}{"not_spam_if_subject"};
+    my $dis_from = $config->{$list}{"discard_if_from"};
+    my $dis_subj = $config->{$list}{"discard_if_subject"};
+    my $dis_reas = $config->{$list}{"discard_if_reason"};
 
     print "fetching data for $list\n";
     $info = get_list ($list, $user, $pw);
@@ -69,16 +74,35 @@ for my $list (sort {$config->{$a}{"order"} <=> $config->{$b}{"order"}}
 	next if $id eq "global";
 	++$num;
 	$subject = $info->{$id}{"subject"};
+	my $from = $info->{$id}{"from"};
 	print "\n[$num/$count] ======= #$id of $list =======\n";
 	write;
 
 	while (1) {
 	    my $ans;
+	    my $match = "";
 	    if ($spamlevel && $info->{$id}{"spamscore"} >= $spamlevel) {
-		print "Automatically discarded as spam.\n";
-		$ans = "d";
+		$match = "spam"; $ans = "d";
 	    }
 	    $ans ||= $config->{$list}{"action"};
+	    $match = "From"
+		    if $dis_from && $from =~ $dis_from;
+	    $match = "Subject"
+		    if $dis_subj && $subject =~ $dis_subj;
+	    $match = "reason"
+		    if $dis_reas && $info->{$id}{"reason"} =~ $dis_reas;
+	    $ans = undef if (($ns_subj && $subject =~ $ns_subj) ||
+			     ($ns_from && $from =~ $ns_from));
+
+	    if ($ans && $match) {
+		if ($match eq "spam") {
+		    print "Automatically discarded as spam.\n";
+		} else {
+		    print "Automatically discarded due to matching $match\n";
+		}
+		$ans = "d";
+	    }
+	    
 	    $ans ||= $term->readline ($listprompt);
 	    $ans = "q" unless defined $ans;
 	    $ans = $def if $ans eq "";
@@ -351,6 +375,11 @@ sub read_config {
     my $lineno = 0;
     my $logfile;
     my $confirm = 1;
+    my %patterns = map { $_ => undef; }
+                       qw (not_spam_if_from not_spam_if_subject
+			   discard_if_from discard_if_subject
+			   discard_if_reason);
+    my $pattern_keywords = join ("|", keys %patterns);
     
     my %act = ("approve" => "a", "discard" => "d",
 	       "reject" => "r", "skip" => "s", "none" => "");
@@ -433,6 +462,16 @@ sub read_config {
 		$logfile =~ s,^M:,$ENV{'HOME'},;
 	    }
 	    $logfile = undef if $logfile eq "none";
+	} elsif ($line =~ /^($pattern_keywords)\s+/o) {
+	    my $key = $1;
+	    my $val = $'; # $POSTFIX
+	    $val =~ s/\s+$//;
+	    if ($val =~ /^"(.*)"$/) {
+		$val = $1;
+		$val =~ s/\\"/"/g;
+		$val =~ s/\\\\/\\/g;
+	    }
+	    $patterns{$key} = ($val eq "NONE") ? undef : $val;
 	} elsif ($line =~ /^([^@ \t]+@[^@])+\s*/) {
 	    $conf{$line} = { "user" => $user,
 			     "password" => $pw,
@@ -441,6 +480,7 @@ sub read_config {
 			     "action" => $action,
 			     "default" => $default,
 			     "logfile" => $logfile,
+			     %patterns,
 			     "order" => ++$count,
 			 };
 	} else {
