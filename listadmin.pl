@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.17
+# listadmin version 2.18
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -23,8 +23,8 @@ Usage: $0 [-f CONFIGFILE] [-t MINUTES] [LISTNAME]
   -f CONFIGFILE    Read configuration from CONFIGFILE.
                    (default: $rc)
   -t MINUTES       Stop processing after MINUTES minutes.  Decimals are
-                   allowed
-  LISTNAME         Only process lists with name matching LISTNAME
+                   allowed.
+  LISTNAME         Only process lists with name matching LISTNAME.
 _end_
     exit (64);
 }
@@ -35,8 +35,9 @@ upgrade_config($oldconf, $rc);
 
 our ($opt_f, $opt_t, $opt_n);
 
-usage unless getopts('f:t:');
+usage() unless getopts('f:t:');
 $rc = $opt_f if $opt_f;
+usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
 my $time_limit = time + 60 * ($opt_t || 24*60);
 
 my $config = read_config ($rc);
@@ -264,14 +265,15 @@ sub approve_messages {
 	    } elsif ($ans eq "b") {
 		my $head = lc $info->{$id}{"headers"};
 		my $text = $info->{$id}{"body"};
-		if ($head =~ /content-type:\s+text\/\S+\s+charset="?(iso-8859-15?|us-ascii|utf-8)"?/) {
-		    my $charset = $1;
-		    if ($head =~ /content-transfer-encoding: (base64|quoted-printable)/) {
-			if ($1 eq "base64") {
-			    $text = MIME::Base64::decode_base64($text);
-			} else {
-			    $text = MIME::QuotedPrint::decode($text);
-			}
+		if ($head =~ m,content-type:\s+text/,) {
+		    my $charset = "UNKNOWN";
+		    if ($head =~ /charset="?(iso-8859-15?|us-ascii|utf-8)"?/) {
+			$charset = $1;
+		    }
+		    if ($head =~ /content-transfer-encoding:\s+quoted-print/) {
+			$text = MIME::QuotedPrint::decode($text);
+		    } elsif ($head =~ /content-transfer-encoding:\s+base64/) {
+			$text = MIME::Base64::decode_base64($text);
 		    }
 		    $text = utf8_to_latin1 ($text) if $charset eq "utf-8";
 		}
@@ -444,6 +446,12 @@ sub utf8_to_latin1_char {
     return "";
 }
 
+sub decode_rfc2047_qp {
+    my $text = shift;
+    $text =~ s/_/ /g;
+    return MIME::QuotedPrint::decode ($text);
+}
+
 sub parse_approval {
     my ($parse, $data) = @_;
     my ($from, $reason, $subject, $id, $mmver, $body, $headers);
@@ -473,11 +481,10 @@ sub parse_approval {
 	$reason = $parse->get_trimmed_text("/td");
     }
     my $utf8 = 0;
-
     # this will also decode invalid tokens, where the encoded word is
     # concatenated with other letters, e.g.  foo=?utf-8?q?=A0=F8?=
     $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?q\?(.*?)\?=/
-	MIME::QuotedPrint::decode($2)/ieg;
+	    decode_rfc2047_qp($2)/ieg;
     $utf8 ||= 1 if defined $1 && $1 =~ /utf-8/i;
     $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?b\?(.*?)\?=/
 	MIME::Base64::decode_base64($2)/ieg;
@@ -849,7 +856,7 @@ sub commit_changes {
 			     $msgs->{$id}{"from"},
 			     $msgs->{$id}{"subject"});
 	}
-	if ($what eq "r") {
+	if ($what =~ /^s?r$/) {
 	    $text =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
 	    $url .= "&comment-$id=$text";
 	}
@@ -859,7 +866,7 @@ sub commit_changes {
 	# request, but it recommends that a server does not rely on
 	# clients being able to send URIs larger than 255 octets.  the
 	# reject reason can be very long, so theoretically, we can
-	# overshoot that limit even if we change the 1000 below into
+	# overshoot that limit even if we change the 500 below into
 	# 250.  Mailman has been observed to reject URI's ~3400 octets
 	# long, but accept 8021.  the limit is probably based on the
 	# time taken to process, rather than the length of the URI.
