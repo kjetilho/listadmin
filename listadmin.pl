@@ -1,7 +1,7 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.22
-# Written 2003, 2004 by
+# listadmin version 2.23
+# Written 2003 - 2005 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
 
@@ -319,15 +319,16 @@ sub url_quote_parameter {
     $param;
 }
 
-sub mailman_url {
-    my ($list, $pattern, $user, $pw) = @_;
+sub mailman_params {
+    my ($user, $pw) = @_;
+    my %params = ();
+    $params{"username"} = $user if defined $user;
+    $params{"adminpw"} = $pw if defined $pw;
+    return \%params;
+}
 
-    my @params = ();
-    push (@params, "username=" . url_quote_parameter ($user))
-	    if defined $user;
-    push (@params, "adminpw=". url_quote_parameter ($pw))
-	    if defined $pw;
-    my $args = join ("&", @params);
+sub mailman_url {
+    my ($list, $pattern) = @_;
 
     my ($lp, $domain) = split ('@', $list);
     if ($pattern) {
@@ -337,12 +338,12 @@ sub mailman_url {
 	$url =~ s/\{list\}/$lp/g;
 	$url =~ s/\{domain\}/$domain/g;
 	$url =~ s/\{subdomain\}/$subdom/g;
-	return "$url?$args";
+	return $url;
     }
 
     my $www = $domain;
     if ($domain eq "lister.ping.uio.no") {
-	return "https://$domain/mailman/$domain/admindb/$lp?$args";
+	return "https://$domain/mailman/$domain/admindb/$lp";
     } elsif ($domain =~ /^(\w+)\.uio\.no$/) {
 	$www = "$1-lists.uio.no";
     } elsif ($domain eq "uio.no") {
@@ -351,7 +352,7 @@ sub mailman_url {
 	# horrific.  this default should be split into a site specific file.
 	$www = "lister.uio.no";
     }
-    return "http://$www/mailman/admindb/$list?$args";
+    return "http://$www/mailman/admindb/$list";
 }
 
 sub get_list {
@@ -363,7 +364,7 @@ sub get_list {
 
     my $page;
 
-    my $resp = $ua->get (mailman_url ($list, $url, $user, $pw));
+    my $resp = $ua->post (mailman_url($list, $url), mailman_params($user, $pw));
     $page = $resp->content;
 
     # save it for eased debug for the developer...
@@ -669,7 +670,7 @@ sub read_config {
 	next if /^$/;
 	if ($line =~ /^username\s+/i) {
 	    $user = unquote ($'); # $POSTFIX
-	    if ($user !~ /^[a-z0-9._-]+\@[a-z0-9.-]+$/) {
+	    if ($user !~ /^[a-z0-9._+-]+\@[a-z0-9.-]+$/) {
 		print STDERR "$file:$lineno: Illegal username: '$user'\n";
 		exit 1;
 	    }
@@ -865,18 +866,18 @@ END
 sub commit_changes {
     my ($list, $user, $pw, $url, $change, $msgs, $logfile) = @_;
 
-    my $baseurl = mailman_url ($list, $url, $user, $pw);
+    my $baseurl = mailman_url ($list, $url);
     my $action = $msgs->{"global"}{"actions"};
     my $changes = 0;
     my $update_total = scalar (keys %{$change});
     my $update_count = 0;
+    my $params = mailman_params ($user, $pw);
 
     my $log = log_timestamp ($list);
-    $url = $baseurl;
 
     for my $id (sort { $a <=> $b } keys %{$change}) {
 	my ($what, $text) = @{$change->{$id}};
-	$url .= "&$id=" . $action->{$what};
+	$params->{$id} = $action->{$what};
 	unless ($what =~ /^s[ar]$/) {
 	    # we don't log subscription approval or rejects
 	    $log .= sprintf ("%s D:[%s] F:[%s] S:[%s]\n",
@@ -886,8 +887,7 @@ sub commit_changes {
 			     $msgs->{$id}{"subject"});
 	}
 	if ($what =~ /^s?r$/) {
-	    $text =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
-	    $url .= "&comment-$id=$text";
+	    $params->{"comment-$id"} = $text;
 	}
 	++$changes;
 
@@ -902,14 +902,15 @@ sub commit_changes {
 	# in times with high load on the Mailman server, it's best to
 	# keep the amount of work per request down.
 
-	if (length ($url) > 500) {
+	if ($changes > 50) {
 	    $update_count += $changes;
 	    printf("sending %d updates to server, %d left    \r",
 		   $changes, $update_total - $update_count);
-	    submit_http ($url, $log, $logfile);
-	    $url = $baseurl;
+	    submit_http ($baseurl, $params, $log, $logfile);
 	    $log = log_timestamp ($list);
 	    $changes = 0;
+	    $params = mailman_params ($user, $pw);
+	    
 	    # even if time has run out, we will always submit at least
 	    # one batch of data.
 	    if (time > $time_limit) {
@@ -918,7 +919,7 @@ sub commit_changes {
 	    }
 	}
     }
-    submit_http ($url, $log, $logfile)
+    submit_http ($baseurl, $params, $log, $logfile)
 	    if $changes;
     print (" " x 72, "\r") if $update_count > 0;
 }
@@ -932,7 +933,7 @@ sub log_timestamp {
 }
 
 sub submit_http {
-    my ($url, $log, $logfile) = @_;
+    my ($url, $params, $log, $logfile) = @_;
 
     my $opened;
     if ($logfile) {
@@ -944,16 +945,15 @@ sub submit_http {
 	    print STDERR "WARNING: Failed to append to $logfile: $!\n";
 	}
     }
-    my $ret = $ua->get ($url);
+    my $ret = $ua->post ($url, $params);
     print STDERR "server returned error\n", $ret->error_as_HTML, "\n"
 	    unless $ret->is_success;
     if ($opened) {
 	if ($ret->is_success) {
-	    print LOG "changes sent to server ";
+	    print LOG "changes sent to server\n";
 	} else {
 	    print LOG "server returned error\n", $ret->error_as_HTML, "\n";
 	}
-	print LOG "(URI length ", length ($url), ")\n";
 	close (LOG);
     }
 }
