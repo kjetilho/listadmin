@@ -1,6 +1,6 @@
-#! /local/bin/perl5
+#! /usr/bin/perl -w
 #
-# listadmin version 2.14
+# listadmin version 2.15
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -495,6 +495,8 @@ sub parse_approval {
     $headers = $parse->get_text("/td");
     $data->{$id}->{"spamscore"} = 0;
     $data->{$id}->{"spamscore"} = length ($1)
+	    if $headers =~ /^X-Spam-Level: (\*+)/im;
+    $data->{$id}->{"spamscore"} = length ($1)
 	    if $headers =~ /^X-UiO-Spam-score: (s+)/m;
     $data->{$id}->{"date"} = "<no date>";
     $data->{$id}->{"date"} = $1
@@ -821,7 +823,7 @@ sub commit_changes {
     my $changes = 0;
 
     my $log = log_timestamp ($list);
-    my $url = $baseurl;
+    $url = $baseurl;
 
     for my $id (keys %{$change}) {
 	my ($what, $text) = @{$change->{$id}};
