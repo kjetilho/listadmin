@@ -1,11 +1,13 @@
 #! /local/bin/perl5
 #
-# listadmin version 2.07
+# listadmin version 2.09
 # Written 2003 by Kjetil Torgrim Homme <kjetilho@ifi.uio.no>
 # Released into public domain.
 
 use HTML::TokeParser;
 use LWP::UserAgent;
+use MIME::Base64;
+use MIME::QuotedPrint;
 use Data::Dumper;
 use Term::ReadLine;
 use IO::Handle;
@@ -32,65 +34,153 @@ unless ($config) {
     $config = read_config ($rc);
 }
 
-my ($info, $id, $subject);
+my ($from, $subject, $reason, $spamscore);
 
 format STDOUT =
 From:    @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-         $info->{$id}{"from"}
+         $from
 Subject: ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
          $subject
 ~~       ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
          $subject
 Reason:  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  Spam? @<<
-         $info->{$id}{"reason"},               $info->{$id}{"spamscore"}
+         $reason,                                             $spamscore
 .
 
-my $prompt =
-'Approve/Reject/Discard/Skip/view Body/view Full/Help/Quit/eXit';
 
 for my $list (sort {$config->{$a}{"order"} <=> $config->{$b}{"order"}}
 	           keys %{$config}) {
-    my $def = $config->{$list}{"default"};
-    my $spamlevel = $config->{$list}{"spamlevel"};
     my $user = $config->{$list}{"user"};
     my $pw = $config->{$list}{"password"};
-    my $ns_from = $config->{$list}{"not_spam_if_from"};
-    my $ns_subj = $config->{$list}{"not_spam_if_subject"};
-    my $dis_from = $config->{$list}{"discard_if_from"};
-    my $dis_subj = $config->{$list}{"discard_if_subject"};
-    my $dis_reas = $config->{$list}{"discard_if_reason"};
 
     print "fetching data for $list\n";
-    $info = get_list ($list, $user, $pw);
-    my $num = 0;
-    my $count = keys (%{$info}) - 1;
+    my $info = get_list ($list, $user, $pw);
     my %change = ();
-    my $listprompt = $prompt;
-    $listprompt = $prompt . " [" . uc($def) . "]" if $def;
-    $listprompt .= " ? ";
+
+    process_subscriptions ($list, $info, $config->{$list}, \%change);
+    approve_messages ($list, $info, $config->{$list}, \%change);
+
+    if ($config->{$list}->{"confirm"}) {
+	if (scalar %change) {
+	redo_confirm:
+	    my $c = $term->readline ("Submit changes? [yes] ");
+	    if ($c =~ /^\s*(\?+|h|hj?elp)\s*$/i) {
+		print <<_END_;
+Nothing will be done to the messages in the administrative queue
+unless you answer this question affirmatively.
+_END_
+		goto redo_confirm;
+	    }
+	    unless ($c =~ /^\s*(|ja?|y|yes)\s*$/) {
+		print "skipping ...\n";
+		next;
+	    }
+	}
+    }
+
+    commit_changes ($list, $user, $pw, \%change, $info,
+		    $config->{$list}{"logfile"});
+}
+
+sub process_subscriptions {
+    my ($list, $info, $config, $change) = @_;
+    my %subscribers = ();
+    my $num = 0;
+    for my $req (keys %{$info}) {
+	if (exists $info->{$req}->{"subscription"}) {
+	    $subscribers{$req} = $info->{$req}->{"subscription"};
+	    delete $info->{$req};
+	}
+    }
+    my $count = keys (%subscribers);
+    my $def = $config->{"subdef"};
+    my $prompt = 'Accept/Reject/Skip/Quit';
+    $prompt .= " [" . uc($def) . "]" if $def;
+    $prompt .= " ? ";
+
+ subscr_loop:
+    for my $id (sort keys %subscribers) {
+	++$num;
+	print "\n[$num/$count] ======= \#$id of $list =======\n";
+	print "From:    $subscribers{$id}\n";
+	print "         subscription request\n";
+	my $ans;
+	while (1) {
+	    $ans = $config->{"subact"};
+	    $ans ||= $term->readline ($prompt);
+	    $ans = "q" unless defined $ans;
+	    $ans =~ s/\s+//g;
+	    $ans = $def if $ans eq "";
+	    $ans = lc ($ans);
+	    last subscr_loop if $ans eq "q";
+	    next subscr_loop if $ans eq "s";
+	    if ($ans eq "a") {
+		$change->{$id} = [ "sa" ];
+		last;
+	    } elsif ($ans eq "r") {
+		my $r = $term->readline ("Why do you reject? [optional] ");
+		unless (defined $r) {
+
+		}
+		$change->{$id} = [ "sr", $r ];
+		last;
+	    } else {
+		print STDERR <<end;
+Choose one of the following actions by typing the corresponding letter
+and pressing Return.
+
+  a  Accept    -- allow the user to join the mailing list
+  r  Reject    -- notify sender that the request was turned down
+  s  Skip      -- do not decide now, leave it for later
+  q  Quit      -- go on to approving messages
+
+end
+            }
+	}
+    }
+}
+
+sub approve_messages {
+    my ($list, $info, $config, $change) = @_;
+
+    my $def = $config->{"default"};
+    my $spamlevel = $config->{"spamlevel"};
+    my $ns_from = $config->{"not_spam_if_from"};
+    my $ns_subj = $config->{"not_spam_if_subject"};
+    my $dis_from = $config->{"discard_if_from"};
+    my $dis_subj = $config->{"discard_if_subject"};
+    my $dis_reas = $config->{"discard_if_reason"};
+
+    my $count = keys (%{$info}) - 1;	# subtract 1 for globals
+    my $num = 0;
+    my $prompt = 'Approve/Reject/Discard/Skip/view Body/view Full/Help/Quit';
+    $prompt .= " [" . uc($def) . "]" if $def;
+    $prompt .= " ? ";
 
  msgloop:
-    for $id (sort keys %{$info}) {
+    for my $id (sort keys %{$info}) {
 	next if $id eq "global";
 	++$num;
+	$from = $info->{$id}{"from"};
 	$subject = $info->{$id}{"subject"};
-	my $from = $info->{$id}{"from"};
-	print "\n[$num/$count] ======= #$id of $list =======\n";
+	$reason = $info->{$id}{"reason"};
+	$spamscore = $info->{$id}{"spamscore"};
+	print "\n[$num/$count] ======= \#$id of $list =======\n";
 	write;
 
 	while (1) {
 	    my $ans;
 	    my $match = "";
-	    if ($spamlevel && $info->{$id}{"spamscore"} >= $spamlevel) {
+	    if ($spamlevel && $spamscore >= $spamlevel) {
 		$match = "spam"; $ans = "d";
 	    }
-	    $ans ||= $config->{$list}{"action"};
-	    $match = "From"
-		    if $dis_from && $from =~ $dis_from;
+	    $ans ||= $config->{"action"};
+	    $match = "From" if got_match ($from, $dis_from);
 	    $match = "Subject"
 		    if $dis_subj && $subject =~ $dis_subj;
 	    $match = "reason"
-		    if $dis_reas && $info->{$id}{"reason"} =~ $dis_reas;
+		    if $dis_reas && $reason =~ $dis_reas;
+	    $ans ||= "d" if $match;
 	    $ans = undef if (($ns_subj && $subject =~ $ns_subj) ||
 			     ($ns_from && $from =~ $ns_from));
 
@@ -103,15 +193,15 @@ for my $list (sort {$config->{$a}{"order"} <=> $config->{$b}{"order"}}
 		$ans = "d";
 	    }
 	    
-	    $ans ||= $term->readline ($listprompt);
+	    $ans ||= $term->readline ($prompt);
 	    $ans = "q" unless defined $ans;
-	    $ans = $def if $ans eq "";
 	    $ans =~ s/\s+//g;
+	    $ans = $def if $ans eq "";
 	    $ans = lc $ans;
 	    last msgloop if $ans eq "q";
 	    next msgloop if $ans eq "s";
 	    if ($ans eq "a" || $ans eq "d") {
-		$change{$id} = [ $ans ];
+		$change->{$id} = [ $ans ];
 		last;
 	    } elsif ($ans eq "r") {
 	    redo_reject:
@@ -126,11 +216,8 @@ for my $list (sort {$config->{$a}{"order"} <=> $config->{$b}{"order"}}
 		    goto redo_reject;
 		}
 
-		$change{$id} = [ "r", $r ];
+		$change->{$id} = [ "r", $r ];
 		last;
-	    } elsif ($ans eq "x") {
-		%change = ();
-		last msgloop;
 	    } elsif ($ans eq "f") {
 		print $info->{$id}{"excerpt"};
 	    } elsif ($ans eq "b") {
@@ -153,7 +240,6 @@ and pressing Return.
   b  view Body -- display the first 20 lines of the message
   f  view Full -- display the complete message, including headers
   q  Quit      -- go on to the next list
-  x  eXit      -- go on to the next list, undo all actions chosen
 
 end
 		print <<"end" if $def;
@@ -163,25 +249,8 @@ end
             }
 	}
     }
-
-    if ($config->{$list}{"confirm"}) {
-	if (scalar %change) {
-	redo_confirm:
-	    my $c = $term->readline ("Submit changes? [yes] ");
-	    if ($c =~ /^\s*(\?+|h|hj?elp)\s*$/i) {
-		print "Nothing will be done to the messages in the administrative queue\nunless you answer this question affirmatively.\n";
-		goto redo_confirm;
-	    }
-	    unless ($c =~ /^\s*(|ja?|y|yes)\s*$/) {
-		print "skipping ...\n";
-		next;
-	    }
-	}
-    }
-
-    commit_changes ($list, $user, $pw, \%change, $info,
-		    $config->{$list}{"logfile"});
 }
+
 
 sub mailman_url {
     my ($list, $user, $pw) = @_;
@@ -214,129 +283,190 @@ sub get_list {
 
     my $resp = $ua->get (mailman_url ($list, $user, $pw));
     $page = $resp->content;
+    if (open (DUMP, ">/tmp/dump-$list.html")) {
+	print DUMP $page;
+	close (DUMP);
+    }
     unless ($resp->is_success) {
 	print STDERR $resp->error_as_HTML;
 	return ();
     }
-
-    my $duration = time - $starttime;
-    my $report_stats;
-    if ($duration >= 30) {
-	printf("... got it, took %d:%02d.  now parsing ...",
-	       $duration/60, $duration%60);
-	$report_stats = 1;
-    }
-
-    my $starttime = time;
     my $parse = HTML::TokeParser->new(\$page) || die;
-    my ($from, $subject, $reason, $id, $tag, $excerpt, $spamscore, $rej);
-    my $date;
-    my $mailmanversion = 1;
-    while ($parse->get_tag ("table")) {
-    
-	$parse->get_tag ("tr") || die; # From:_or_ at end
-	$parse->get_tag ("td") || die;
-	my $ver = $parse->get_trimmed_text ("/td") || die;
-	last if $ver =~ /version/;
-	$parse->get_tag ("td") || die;
-	$from = $parse->get_trimmed_text("/td");
 
-	$parse->get_tag ("tr") || die $page; # Reason: _or_ Subject:
-	$parse->get_tag ("td") || die;
-
-	# the parsing just happens to fail here when the wrong
-	# password is given...  this is Mailman 1.2
-	my $field = $parse->get_trimmed_text ("/td") ||
-		die "Could not parse the HTML from the web interface.\n".
-			"Is your username and password correct?\n";
-
-	$parse->get_tag ("td") || die; 
-	if ($field =~ /Reason/) {
-	    $reason = $parse->get_trimmed_text("/td");
-	    $parse->get_tag ("tr") || die; # Subject:
-	    $parse->get_tag ("td") || die;
-
-	    # the parsing just happens to fail here when the wrong
-	    # password is given...
-	    $parse->get_tag ("td") ||
-		    die "Could not parse the HTML from the web interface.\n".
-			    "Is your username and password correct?\n";
-	    $subject = $parse->get_trimmed_text("/td");
-	} else {
-	    $subject = $parse->get_trimmed_text("/td");
-	    $parse->get_tag ("tr") || die; # Reason:
-	    $parse->get_tag ("td") || die;
-
-	    # the parsing just happens to fail here when the wrong
-	    # password is given...  this is Mailman 2.0.13 -- although
-	    # this branch of the if test is usually run for Mailman 1!
-
-	    $parse->get_tag ("td") ||
-		    die "Could not parse the HTML from the web interface.\n".
-			    "Is your username and password correct?\n";
-	    $reason = $parse->get_trimmed_text("/td");
-	}
-
-	$parse->get_tag ("tr") || die; # Action:
-	$tag = $parse->get_tag ("input") || die;
-	$id = $tag->[1]{"name"};
-
-	$parse->get_tag ("tr") || die; # Reject _or_ Preserve message
-	$parse->get_tag ("td") || die;
-	$parse->get_tag ("td") || die;
-	$rej = $parse->get_trimmed_text("/td") || die;
-	if ($rej =~ /Preserve message/) {
-	    $mailmanversion = 2;
-	    $parse->get_tag ("tr") || die;    # forward
-	    $parse->get_tag ("tr") || die;    # Reject
-	    $parse->get_tag ("td") || die;
-	    $parse->get_tag ("td") || die;
-	    $rej = $parse->get_trimmed_text("/td") || die;
-	}
-
-	$parse->get_tag ("tr") || die; # Message Excerpt _or_ Headers
-	$parse->get_tag ("td") || die;
-	$parse->get_tag ("td") || die;
-	$excerpt = $parse->get_text("/td");
-	$spamscore = 0;
-	$spamscore = length ($1)
-		if $excerpt =~ /^X-UiO-Spam-score: (s+)/m;
-	$date = "<no date>";
-	$date = $1 if $excerpt =~ /^Date: (.*)$/m;
-
-	if ($mailmanversion == 2) {
-	    $parse->get_tag ("tr") || die;  # Message Excerpt
-	    $parse->get_tag ("td") || die;
-	    $parse->get_tag ("td") || die;
-	    $excerpt .= "\n" . $parse->get_text("/td");
-	}
-
-	$parse->get_tag ("/table") || die;
-
-	$data{$id} = { "from" => $from,
-		       "subject" => $subject,
-		       "date" => $date,
-		       "reason" => $reason,
-		       "spamscore" => $spamscore,
-		       "rejreason" => $rej,
-		       "excerpt" => $excerpt };
+    $parse->get_tag ("title") || die;
+    my $title = $parse->get_trimmed_text ("/title") || die;
+    if ($title =~ /authentication/i) {
+	print STDERR
+		"Unable to log in. Is your username and password correct?\n";
+	return ();
     }
-    if ($mailmanversion == 1) {
-	$data{"global"}{"actions"} = { "a" => 0,
-				       "r" => 1,
-				       "d" => 2 };
+
+    $parse->get_tag ("hr");
+    $parse->get_tag ("h2") || return ();
+    my $headline = $parse->get_trimmed_text ("/h2") || die;
+    if ($headline =~ /subscription/i) {
+	parse_subscriptions ($parse, \%data);
     } else {
-	$data{"global"}{"actions"} = { "a" => 1,
-				       "r" => 2,
-				       "d" => 3 };
+	$parse->get_tag ("hr") || die;
     }
-    # if downloading took a long time, also report how long parsing
-    # the data took.
-    if ($report_stats) {
-	$duration = time - $starttime;
-	printf(" that took %d:%02d.\n", $duration/60, $duration%60);
+    my $mmver;
+    my $token = $parse->get_token;
+    if ($token->[0] eq "S" && lc ($token->[1]) eq "center") {
+	$mmver = parse_approvals ($parse, \%data);
     }
-    return \%data;
+    return () unless parse_footer ($parse, \%data, $mmver);
+    return (\%data);
+}
+
+sub parse_subscriptions {
+    my ($parse, $data) = @_;
+    my $token;
+
+    $parse->get_tag ("table") || die;
+    $parse->get_tag ("tr") || die;
+    $parse->get_tag ("tr") || die;
+    do {
+	parse_subscription ($parse, $data);
+	do {
+	    $token = $parse->get_token;
+	} until ($token->[0] eq "S");
+    } while (lc ($token->[1]) eq "tr");
+}
+
+sub parse_subscription {
+    my ($parse, $data) = @_;
+
+    $parse->get_tag ("td") || die;
+    my $address = $parse->get_trimmed_text ("/td") || die;
+    my $tag = $parse->get_tag ("input") || die;
+    my $id = $tag->[1]{"name"};
+    $parse->get_tag ("/table") || die;
+    $parse->get_tag ("/tr") || die;
+    $data->{$id} = { "subscription" => $address };
+}
+
+sub parse_approvals {
+    my ($parse, $data) = @_;
+    my $token;
+    my $mmver;
+
+    do {
+	$parse->get_tag ("table") || die;
+	my $ret = parse_approval ($parse, $data);
+	$mmver = $ret if $ret;
+	$parse->get_tag ("/table");
+	$parse->get_tag ("hr");
+	$token = $parse->get_token;
+    } until ($token->[0] eq "S" && lc ($token->[1]) eq "input");
+    return ($mmver);
+}
+
+sub parse_approval {
+    my ($parse, $data) = @_;
+    my ($from, $reason, $subject, $id, $mmver);
+
+    $parse->get_tag ("tr") || die;
+    $parse->get_tag ("td") || die;
+    $parse->get_tag ("td") || die;
+    $from = $parse->get_trimmed_text("/td");
+
+    $parse->get_tag ("tr") || die; # Reason: _or_ Subject:
+    $parse->get_tag ("td") || die;
+    my $field = $parse->get_trimmed_text ("/td");
+    $parse->get_tag ("td") || die; 
+    if ($field =~ /Reason/) {
+	$mmver = 1.2;
+	$reason = $parse->get_trimmed_text("/td");
+	$parse->get_tag ("tr") || die; # Subject:
+	$parse->get_tag ("td") || die;
+	$parse->get_tag ("td") || die;
+	$subject = $parse->get_trimmed_text("/td");
+    } else {
+	$mmver = 2;
+	$subject = $parse->get_trimmed_text("/td");
+	$parse->get_tag ("tr") || die; # Reason:
+	$parse->get_tag ("td") || die;
+	$parse->get_tag ("td") || die;
+	$reason = $parse->get_trimmed_text("/td");
+    }
+    $subject =~ s/=\?iso-8859-15?\?q\?(.*?)\?=/
+	MIME::QuotedPrint::decode($1)/ieg;
+    $subject =~ s/=\?iso-8859-15?\?b\?(.*?)\?=/
+	MIME::Base64::decode_base64($1)/ieg;
+
+    $parse->get_tag ("tr") || die; # Action:
+    my $tag = $parse->get_tag ("input") || die;
+    $id = $tag->[1]{"name"};
+
+    $data->{$id} = { "from" => $from,
+		     "subject" => $subject,
+		     "reason" => $reason };
+
+    $parse->get_tag ("tr") || die; # Reject _or_ Preserve message
+    if ($mmver >= 2) {
+	$parse->get_tag ("tr") || die;    # forward
+	$parse->get_tag ("tr") || die;    # Reject
+    }
+    $parse->get_tag ("td") || die;
+    $parse->get_tag ("td") || die;
+    $data->{$id}->{"rejreason"} = $parse->get_trimmed_text("/td") || die;
+
+
+    $parse->get_tag ("tr") || die; # Message Excerpt _or_ Headers
+    $parse->get_tag ("td") || die;
+    $parse->get_tag ("td") || die;
+    $data->{$id}->{"excerpt"} = $parse->get_text("/td");
+    $data->{$id}->{"spamscore"} = 0;
+    $data->{$id}->{"spamscore"} = length ($1)
+	    if $data->{$id}->{"excerpt"} =~ /^X-UiO-Spam-score: (s+)/m;
+    $data->{$id}->{"date"} = "<no date>";
+    $data->{$id}->{"date"} = $1
+	    if $data->{$id}->{"excerpt"} =~ /^Date: (.*)$/m;
+
+    if ($mmver == 2) {
+	$parse->get_tag ("tr") || die;  # Message Excerpt
+	$parse->get_tag ("td") || die;
+	$parse->get_tag ("td") || die;
+	$data->{$id}->{"excerpt"} .= "\n".$parse->get_text("/td");
+    }
+    $data->{$id}->{"excerpt"} .= "\n"
+	    unless $data->{$id}->{"excerpt"} =~ /\n$/;
+
+    return ($mmver);
+}
+
+sub parse_footer {
+    my ($parse, $data, $mmver) = @_;
+
+    $parse->get_tag ("address") || die;
+    my $text = $parse->get_trimmed_text ("/address") || die;
+
+    if ($text =~ /Mailman\s*v(ersion)? (\d+\.\d+)/) {
+	if ($mmver && $mmver != 0 + $2) {
+	    print STDERR "Unknown version of Mailman.  First I thought ",
+	        "this was version $mmver.\n", "Now version ", 0 + $2,
+	        " looks more likely.  Help!\n";
+	    return (0);
+	}
+	$mmver = 0 + $2;
+    }
+
+    if ($mmver == 2) {
+	$data->{"global"}{"actions"} = { "a" => 1,
+					 "r" => 2,
+					 "d" => 3,
+					 "sa" => 4, # subscribe approve
+					 "sr" => 2, # subscribe reject
+				     };
+    } else {
+	$data->{"global"}{"actions"} = { "a" => 0,
+					 "r" => 1,
+					 "d" => 2,
+					 "sa" => 1, # subscribe approve
+					 "sr" => 0, # subscribe reject
+				     };
+    }
+    return (1);
 }
 
 # .listconf was the configuration file for the previous listadmin
@@ -349,16 +479,17 @@ sub upgrade_config {
     print "Converting to new configuration file, $rc\n\n";
 
     my $cmd = ". $conf; umask 077; (". <<'END' . ") > $rc";
- printf "# automatically converted from .listconf\r\n";
- printf "#\r\n";
- printf "username $LISTUSER\r\n";
- printf "password \"$LISTPASS\"\r\n";
- printf "spamlevel 12\r\n";
- printf "default discard\r\n";
- printf "# uncomment the following to get a terse transaction log\r\n";
- printf "# log \"~/.listadmin.log\"\r\n";
- printf "\r\n"
- for l in $LISTS; do printf "$l\r\n"; done
+      printf "# automatically converted from .listconf\r\n";
+      printf "#\r\n";
+      printf "username $LISTUSER\r\n";
+      printf "password \"$LISTPASS\"\r\n";
+      printf "spamlevel 12\r\n";
+      printf "not_spam_if_from uio\.no\n";
+      printf "default discard\r\n";
+      printf "# uncomment the following to get a terse transaction log\r\n";
+      printf "# log \"~/.listadmin.log\"\r\n";
+      printf "\r\n";
+      for l in $LISTS; do printf "$l\r\n"; done
 END
     system $cmd;
 }
@@ -367,8 +498,10 @@ sub read_config {
     my ($file) = @_;
 
     my ($user, $pw, $spam, $list);
-    my %conf = ();
+    my $conf = {};
     my $line = "";
+    my $subact;
+    my $subdef;
     my $action = "";
     my $default = "";
     my $count = 0;
@@ -376,14 +509,17 @@ sub read_config {
     my $logfile;
     my $confirm = 1;
     my %patterns = map { $_ => undef; }
-                       qw (not_spam_if_from not_spam_if_subject
-			   discard_if_from discard_if_subject
+                       qw (not_spam_if_from
+			   not_spam_if_subject
+			   discard_if_from
+			   discard_if_subject
 			   discard_if_reason);
     my $pattern_keywords = join ("|", keys %patterns);
     
     my %act = ("approve" => "a", "discard" => "d",
 	       "reject" => "r", "skip" => "s", "none" => "");
-
+    my %sact = ("accept" => "a",
+		"reject" => "r", "skip" => "s", "none" => "");
 
     return undef unless open (CONF, $file);
     while (<CONF>) {
@@ -391,69 +527,62 @@ sub read_config {
 	chomp;
 	s/\r$//;
 	next if /^\s*#/;
+	s/^\s+// if $line;	# remove leading whitespace after continuation
 	if (/\\$/) {
-	    $line = $`; # $PREFIX
+	    $line .= $`; # $PREFIX
 	    next;
 	}
 	$line .= $_;
 	$line =~ s/^\s+//;
 	next if /^$/;
 	if ($line =~ /^username\s+/i) {
-	    $user = $'; # $POSTFIX
-	    $user =~ s/\s+$//;
-	    $user =~ s/^"(.*)"$/$1/;
+	    $user = unquote ($'); # $POSTFIX
 	    if ($user !~ /^[a-z0-9._-]+\@[a-z0-9.-]+$/) {
 		print STDERR "$file:$lineno: Illegal username: '$user'\n";
 		exit 1;
 	    }
 	} elsif ($line =~ /^password\s+/i) {
-	    $pw = $'; # $POSTFIX
-	    $pw =~ s/\s+$//;
-	    if ($pw =~ /^"(.*)"$/) {
-		$pw = $1;
-		$pw =~ s/\\"/"/g;
-		$pw =~ s/\\\\/\\/g;
-	    }
+	    $pw = unquote ($');
 	} elsif ($line =~ /^spamlevel\s+/i) {
-	    $spam = $';
+	    $spam = unquote ($');
 	    if ($spam =~ /^(\d+)\s*$/) {
 		$spam = $1;
 	    } else {
-		print STDERR "$file:$lineno: Illegal spamlevel value: '$spam'\n";
+		print STDERR "$file:$lineno: Illegal value: '$spam'\n";
+		print STDERR "choose a positive numeric value\n";
 		exit 1;
 	    }
 	} elsif ($line =~ /^confirm\s+/i) {
-	    $confirm = $'; # $POSTFIX
-	    $confirm =~ s/^"(.*)"\s*/$1/;
+	    $confirm = unquote ($');
 	    if ($confirm eq "yes") {
 		$confirm = 1;
 	    } elsif ($confirm eq "no") {
 		$confirm = undef;
 	    } else {
 		print STDERR "$file:$lineno: Illegal value: '$confirm'\n";
+		print STDERR "choose one of yes or no\n";
 		exit 1;
 	    }
 	} elsif ($line =~ /^action\s+/i) {
-	    $action = $'; # $POSTFIX
-	    $action =~ s/^"(.*)"\s*/$1/;
-	    unless (defined $act{$action}) {
-		print STDERR "$file:$lineno: Illegal action value: '$action'\n";
+	    $action = unquote ($'); # $POSTFIX
+	    unless (exists $act{$action}) {
+		print STDERR "$file:$lineno: Illegal value: '$action'\n";
+		print STDERR "choose one of ",
+                             join (", ", sort keys %act), "\n";
 		exit 1;
 	    }
 	    $action = $act{$action};
 	} elsif ($line =~ /^default\s+/i) {
-	    $default = $'; # $POSTFIX
-	    $default =~ s/^"(.*)"\s*/$1/;
-	    unless (defined $act{$default}) {
-		print STDERR "$file:$lineno: Illegal default value: '$default'\n";
+	    $default = unquote ($'); # $POSTFIX
+	    unless (exists $act{$default}) {
+		print STDERR "$file:$lineno: Illegal value: '$default'\n";
+		print STDERR "choose one of ",
+                             join (", ", sort keys %act), "\n";
 		exit 1;
 	    }
 	    $default = $act{$default};
 	} elsif ($line =~ /^log\s+/i) {
-	    $logfile = $'; # $POSTFIX
-	    $logfile =~ s/^"(.*)"\s*/$1/;
-	    $logfile =~ s/\\"/"/g;
-	    $logfile =~ s/\\\\/\\/g;
+	    $logfile = unquote ($'); # $POSTFIX
 	    $logfile =~ s,^\$HOME/,$ENV{'HOME'}/,;
 	    $logfile =~ s,^~/,$ENV{'HOME'}/,;
 	    $logfile =~ s,^~(\w+)/,(getpwnam($1))[7]."/",e;
@@ -462,6 +591,24 @@ sub read_config {
 		$logfile =~ s,^M:,$ENV{'HOME'},;
 	    }
 	    $logfile = undef if $logfile eq "none";
+	} elsif ($line =~ /^subscription_action\s+/) {
+	    $subact = unquote ($');
+	    unless (exists $sact{$subact}) {
+		print STDERR "$file:$lineno: Illegal value: '$subact'\n";
+		print STDERR "choose one of ",
+		             join (", ", sort keys %sact), "\n";
+		exit 1;
+	    }
+	    $subact = $sact{$subact};
+	} elsif ($line =~ /^subscription_default\s+/) {
+	    $subdef = unquote ($');
+	    unless (exists $sact{$subdef}) {
+		print STDERR "$file:$lineno: Illegal value: '$subdef'\n";
+		print STDERR "choose one of ",
+		             join (", ", sort keys %sact), "\n";
+		exit 1;
+	    }
+	    $subdef = $sact{$subdef};
 	} elsif ($line =~ /^($pattern_keywords)\s+/o) {
 	    my $key = $1;
 	    my $val = $'; # $POSTFIX
@@ -473,16 +620,18 @@ sub read_config {
 	    }
 	    $patterns{$key} = ($val eq "NONE") ? undef : $val;
 	} elsif ($line =~ /^([^@ \t]+@[^@])+\s*/) {
-	    $conf{$line} = { "user" => $user,
-			     "password" => $pw,
-			     "spamlevel" => $spam,
-			     "confirm" => $confirm,
-			     "action" => $action,
-			     "default" => $default,
-			     "logfile" => $logfile,
-			     %patterns,
-			     "order" => ++$count,
-			 };
+	    $conf->{$line} = { "user" => $user,
+			       "password" => $pw,
+			       "spamlevel" => $spam,
+			       "confirm" => $confirm,
+			       "subact" => $subact,
+			       "subdef" => $subdef,
+			       "action" => $action,
+			       "default" => $default,
+			       "logfile" => $logfile,
+			       %patterns,
+			       "order" => ++$count,
+			   };
 	} else {
 	    print STDERR "$file:$lineno: Syntax error: '$line'\n";
 	    exit 1;
@@ -490,9 +639,19 @@ sub read_config {
 	$line = "";
     }
     close (CONF);
-    return \%conf;
+    return $conf;
 }
 
+sub unquote {
+    my ($val) = @_;
+    $val =~ s/\s+$//;
+    if ($val =~ /^"(.*)"$/) {
+	$val = $1;
+	$val =~ s/\\"/"/g;
+	$val =~ s/\\\\/\\/g;
+    }
+    return ($val);
+}
 sub prompt_for_config {
     my ($rc) = @_;
 
@@ -577,7 +736,7 @@ sub commit_changes {
     my $log = log_timestamp ($list);
     my $url = $baseurl;
 
-    for $id (keys %{$change}) {
+    for my $id (keys %{$change}) {
 	my ($what, $text) = @{$change->{$id}};
 	$url .= "&$id=" . $action->{$what};
 	$log .= sprintf ("%s D:[%s] F:[%s] S:[%s]\n",
@@ -587,7 +746,7 @@ sub commit_changes {
 			 $msgs->{$id}{"subject"});
 	if ($what == "r") {
 	    $text =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
-	    $url .= "&comment_$id=$text";
+	    $url .= "&comment-$id=$text";
 	}
 	++$changes;
 
@@ -645,5 +804,18 @@ sub submit_http {
 	}
 	print LOG "(URI length ", length ($url), ")\n";
 	close (LOG);
+    }
+}
+
+sub got_match {
+    my ($str, $pattern) = @_;
+
+    return undef unless defined ($str) && $pattern;
+
+    # If the pattern is delimited by slashes, run it directly ...
+    if ($pattern =~ m,^/.*/[ix]*$,) {
+	eval "'$str' =~ $pattern";
+    } else {
+	$str =~ $pattern;
     }
 }
