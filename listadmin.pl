@@ -1,6 +1,6 @@
 #! /local/bin/perl5
 #
-# listadmin version 2.10
+# listadmin version 2.11
 # Written 2003 by Kjetil Torgrim Homme <kjetilho@ifi.uio.no>
 # Released into public domain.
 
@@ -14,7 +14,7 @@ use IO::Handle;
 use strict;
 
 my $term = new Term::ReadLine 'listadmin';
-my $ua = new LWP::UserAgent ("timeout" => 60);
+my $ua = new LWP::UserAgent ("timeout" => 600);
 my $rc = $ENV{"HOME"}."/.listadmin.ini";
 my $oldconf = $ENV{"HOME"}."/.listconf";
 upgrade_config($oldconf, $rc);
@@ -366,6 +366,22 @@ sub parse_approvals {
     return ($mmver);
 }
 
+# NB! lossy!
+sub utf8_to_latin1 {
+    my $self = shift;
+    my ($s) = @_;
+    $s =~ s/([\x80-\xff][\x80-\xbf]*)/&utf8_to_latin1_char($1)/ge;
+    return $s;
+}
+
+sub utf8_to_latin1_char {
+    my($first, @rest) = unpack('C*', $_[0]);
+    $first ^= 0xC2;
+    return chr($first * 0x40 + $rest[0]) if $first < 2 && @rest == 1;
+    # We simply remove the other codes, they obviously won't fit in Latin1.
+    return "";
+}
+
 sub parse_approval {
     my ($parse, $data) = @_;
     my ($from, $reason, $subject, $id, $mmver);
@@ -394,10 +410,14 @@ sub parse_approval {
 	$parse->get_tag ("td") || die;
 	$reason = $parse->get_trimmed_text("/td");
     }
-    $subject =~ s/=\?iso-8859-15?\?q\?(.*?)\?=/
-	MIME::QuotedPrint::decode($1)/ieg;
-    $subject =~ s/=\?iso-8859-15?\?b\?(.*?)\?=/
-	MIME::Base64::decode_base64($1)/ieg;
+    my $utf8 = 0;
+    $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?q\?(.*?)\?=/
+	MIME::QuotedPrint::decode($2)/ieg;
+    $utf8 ||= 1 if $1 =~ /utf-8/i;
+    $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?b\?(.*?)\?=/
+	MIME::Base64::decode_base64($2)/ieg;
+    $utf8 ||= 1 if $1 =~ /utf-8/i;
+    $subject = utf8_to_latin1 ($subject) if $utf8;
 
     $parse->get_tag ("tr") || die; # Action:
     my $tag = $parse->get_tag ("input") || die;
