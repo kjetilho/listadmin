@@ -1,11 +1,13 @@
-.TH LISTADMIN 1 "20 Feb 2004"
+.TH LISTADMIN 1 "24 Feb 2005"
 .\" turn off hyphenation
 .hy 0
+.\" turn on ragged right if run through nroff
+.if n .na
 .SH NAME
 listadmin \- process messages held by Mailman for approval
 
 .SH SYNOPSIS
-.B "listadmin [-f \fIconfigfile\fP] [-f \fIminutes\fP] [\fIlistname\fP]"
+.B "listadmin [-f \fIconfigfile\fP] [-t \fIminutes\fP] [\fIlistname\fP]"
 
 .SH DESCRIPTION
 .I listadmin
@@ -161,7 +163,7 @@ An example configuration file:
 
 	default approve
 	discard_if_reason "Message has implicit|Too many recipients"
-        discard_if_from ^(postmaster|mailer(-daemon)?|listproc|no-reply)@
+	discard_if_from ^(postmaster|mailer(-daemon)?|listproc|no-reply)@
 
 	foo-devel@example.net
 
@@ -173,7 +175,6 @@ An example configuration file:
 .fi
 
 .SH FILES
-.IP
 \fB$HOME/.listadmin.ini\fP
 .PP
 The default configuration file.
@@ -191,8 +192,11 @@ in ideas on how to best make this configurable.
 .PP
 The HTML parser is quite fragile and depends on Mailman not to change
 the format of its generated code.
+.PP
+Mailman 2.1 is not supported.
+.PP
+ISO 8859-1 environment is assumed.
 
 .SH AUTHOR
 Kjetil T. Homme <kjetilho+listadmin@ifi.uio.no>
 .br
-Send bug reports or feature requests to postmaster@uio.no

@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.23
+# listadmin version 2.24
 # Written 2003 - 2005 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -149,9 +149,12 @@ sub process_subscriptions {
 	    $ans =~ s/\s+//g;
 	    $ans = $def if $ans eq "";
 	    $ans = lc ($ans);
-	    last subscr_loop if $ans eq "q";
-	    next subscr_loop if $ans eq "s";
-	    if ($ans eq "a") {
+	    if ($ans eq "q") {
+		last subscr_loop;
+	    } elsif ($ans eq "s") {
+		delete $change->{$id};
+		next subscr_loop;
+	    } elsif ($ans eq "a") {
 		$change->{$id} = [ "sa" ];
 		last;
 	    } elsif ($ans eq "r") {
@@ -238,13 +241,15 @@ sub approve_messages {
 	    $ans =~ s/\s+//g;
 	    $ans = $def if $ans eq "" && defined $def;
 	    $ans = lc $ans;
-	    last msgloop if $ans eq "q";
-	    next msgloop if $ans eq "s";
-	    if ($ans =~ /^\d+$/ && $ans > 0 && $ans <= $count) {
+	    if ($ans eq "q") {
+		last msgloop;
+	    } elsif ($ans eq "s") {
+		delete $change->{$id};
+		next msgloop;
+	    } elsif ($ans =~ /^\d+$/ && $ans > 0 && $ans <= $count) {
 		$num = $ans - 1;
 		next msgloop;
-	    }
-	    if ($ans eq "a" || $ans eq "d") {
+	    } elsif ($ans eq "a" || $ans eq "d") {
 		$change->{$id} = [ $ans ];
 		last;
 	    } elsif ($ans eq "r") {
