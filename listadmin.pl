@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.15
+# listadmin version 2.16
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -465,10 +465,10 @@ sub parse_approval {
     # concatenated with other letters, e.g.  foo=?utf-8?q?=A0=F8?=
     $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?q\?(.*?)\?=/
 	MIME::QuotedPrint::decode($2)/ieg;
-    $utf8 ||= 1 if $1 =~ /utf-8/i;
+    $utf8 ||= 1 if defined $1 && $1 =~ /utf-8/i;
     $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?b\?(.*?)\?=/
 	MIME::Base64::decode_base64($2)/ieg;
-    $utf8 ||= 1 if $1 =~ /utf-8/i;
+    $utf8 ||= 1 if defined $1 && $1 =~ /utf-8/i;
     $subject = utf8_to_latin1 ($subject) if $utf8;
 
     $parse->get_tag ("tr") || die; # Action:
@@ -833,7 +833,7 @@ sub commit_changes {
 			 $msgs->{$id}{"date"},
 			 $msgs->{$id}{"from"},
 			 $msgs->{$id}{"subject"});
-	if ($what == "r") {
+	if ($what eq "r") {
 	    $text =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
 	    $url .= "&comment-$id=$text";
 	}
