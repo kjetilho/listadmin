@@ -1,17 +1,18 @@
 #! /local/bin/perl5
 #
-# listadmin version 2.05
+# listadmin version 2.06
 # Written 2003 by Kjetil Torgrim Homme <kjetilho@ifi.uio.no>
 # Released into public domain.
 
 use HTML::TokeParser;
-use LWP::Simple;
+use LWP::UserAgent;
 use Data::Dumper;
 use Term::ReadLine;
 use IO::Handle;
 use strict;
 
 my $term = new Term::ReadLine 'listadmin';
+my $ua = new LWP::UserAgent ("timeout" => 60);
 my $rc = $ENV{"HOME"}."/.listadmin.ini";
 my $oldconf = $ENV{"HOME"}."/.listconf";
 upgrade_config($oldconf, $rc);
@@ -183,9 +184,26 @@ sub get_list {
 
     # where we gather all the information about pending messages
     my %data = ();
+    my $starttime = time;
 
-    my $page = get (mailman_url ($list, $user, $pw));
+    my $page;
 
+    my $resp = $ua->get (mailman_url ($list, $user, $pw));
+    $page = $resp->content;
+    unless ($resp->is_success) {
+	print STDERR $resp->error_as_HTML;
+	return ();
+    }
+
+    my $duration = time - $starttime;
+    my $report_stats;
+    if ($duration >= 30) {
+	printf("... got it, took %d:%02d.  now parsing ...",
+	       $duration/60, $duration%60);
+	$report_stats = 1;
+    }
+
+    my $starttime = time;
     my $parse = HTML::TokeParser->new(\$page) || die;
     my ($from, $subject, $reason, $id, $tag, $excerpt, $spamscore, $rej);
     my $date;
@@ -199,19 +217,41 @@ sub get_list {
 	$parse->get_tag ("td") || die;
 	$from = $parse->get_trimmed_text("/td");
 
-	$parse->get_tag ("tr") || die $page; # Reason:
-	$parse->get_tag ("td") || die;
-	$parse->get_tag ("td") || die;
-	$reason = $parse->get_trimmed_text("/td");
-
-	$parse->get_tag ("tr") || die; # Subject:
+	$parse->get_tag ("tr") || die $page; # Reason: _or_ Subject:
 	$parse->get_tag ("td") || die;
 
 	# the parsing just happens to fail here when the wrong
-	# password is given...
-	$parse->get_tag ("td") ||
-		die "Parse failed.  Is your username and password correct?\n";
-	$subject = $parse->get_trimmed_text("/td");
+	# password is given...  this is Mailman 1.2
+	my $field = $parse->get_trimmed_text ("/td") ||
+		die "Could not parse the HTML from the web interface.\n".
+			"Is your username and password correct?\n";
+
+	$parse->get_tag ("td") || die; 
+	if ($field =~ /Reason/) {
+	    $reason = $parse->get_trimmed_text("/td");
+	    $parse->get_tag ("tr") || die; # Subject:
+	    $parse->get_tag ("td") || die;
+
+	    # the parsing just happens to fail here when the wrong
+	    # password is given...
+	    $parse->get_tag ("td") ||
+		    die "Could not parse the HTML from the web interface.\n".
+			    "Is your username and password correct?\n";
+	    $subject = $parse->get_trimmed_text("/td");
+	} else {
+	    $subject = $parse->get_trimmed_text("/td");
+	    $parse->get_tag ("tr") || die; # Reason:
+	    $parse->get_tag ("td") || die;
+
+	    # the parsing just happens to fail here when the wrong
+	    # password is given...  this is Mailman 2.0.13 -- although
+	    # this branch of the if test is usually run for Mailman 1!
+
+	    $parse->get_tag ("td") ||
+		    die "Could not parse the HTML from the web interface.\n".
+			    "Is your username and password correct?\n";
+	    $reason = $parse->get_trimmed_text("/td");
+	}
 
 	$parse->get_tag ("tr") || die; # Action:
 	$tag = $parse->get_tag ("input") || die;
@@ -265,6 +305,12 @@ sub get_list {
 	$data{"global"}{"actions"} = { "a" => 1,
 				       "r" => 2,
 				       "d" => 3 };
+    }
+    # if downloading took a long time, also report how long parsing
+    # the data took.
+    if ($report_stats) {
+	$duration = time - $starttime;
+	printf(" that took %d:%02d.\n", $duration/60, $duration%60);
     }
     return \%data;
 }
@@ -327,7 +373,7 @@ sub read_config {
 	    $user = $'; # $POSTFIX
 	    $user =~ s/\s+$//;
 	    $user =~ s/^"(.*)"$/$1/;
-	    if ($user !~ /^[a-z0-9.-]+\@[a-z0-9.-]+$/) {
+	    if ($user !~ /^[a-z0-9._-]+\@[a-z0-9.-]+$/) {
 		print STDERR "$file:$lineno: Illegal username: '$user'\n";
 		exit 1;
 	    }
@@ -358,7 +404,6 @@ sub read_config {
 		print STDERR "$file:$lineno: Illegal value: '$confirm'\n";
 		exit 1;
 	    }
-	    $action = $act{$action};
 	} elsif ($line =~ /^action\s+/i) {
 	    $action = $'; # $POSTFIX
 	    $action =~ s/^"(.*)"\s*/$1/;
@@ -510,10 +555,14 @@ sub commit_changes {
 	# request, but it recommends that a server does not rely on
 	# clients being able to send URIs larger than 255 octets.  the
 	# reject reason can be very long, so theoretically, we can
-	# overshoot that limit.  Mailman has been observed to reject
-	# URI's ~3400 octets long, but accept 6017.
+	# overshoot that limit even if we change the 1000 below into
+	# 250.  Mailman has been observed to reject URI's ~3400 octets
+	# long, but accept 8021.  the limit is probably based on the
+	# time taken to process, rather than the length of the URI.
+	# in times with high load on the Mailman server, it's best to
+	# keep the amount of work per request down.
 
-	if (length ($url) > 2000) {
+	if (length ($url) > 500) {
 	    submit_http ($url, $log, $logfile);
 	    $url = $baseurl;
 	    $log = log_timestamp ($list);
@@ -545,14 +594,16 @@ sub submit_http {
 	    print STDERR "WARNING: Failed to append to $logfile: $!\n";
 	}
     }
-    my $ret = get ($url);
+    my $ret = $ua->get ($url);
+    print STDERR "server returned error\n", $ret->error_as_HTML, "\n"
+	    unless $ret->is_success;
     if ($opened) {
-	if ($ret) {
-	    print LOG "changes sent to server";
+	if ($ret->is_success) {
+	    print LOG "changes sent to server ";
 	} else {
-	    print LOG "server returned error";
+	    print LOG "server returned error\n", $ret->error_as_HTML, "\n";
 	}
-	print LOG " (URI length ", length ($url), ")\n";
+	print LOG "(URI length ", length ($url), ")\n";
 	close (LOG);
     }
 }
