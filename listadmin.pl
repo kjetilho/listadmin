@@ -1,6 +1,6 @@
 #! /local/bin/perl5
 #
-# listadmin version 2.13
+# listadmin version 2.14
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -88,9 +88,11 @@ unless you answer this question affirmatively.
 _END_
 		goto redo_confirm;
 	    }
-	    unless ($c =~ /^\s*(|ja?|y|yes)\s*$/) {
+	    if ($c =~ /^\s*(no?|nei|skip)\s*$/i) {
 		print "skipping ...\n";
 		next;
+	    } elsif ($c !~ /^\s*(|ja?|y|yes)\s*$/i) {
+		goto redo_confirm;
 	    }
 	}
     }
@@ -160,7 +162,7 @@ end
 sub approve_messages {
     my ($list, $info, $config, $change) = @_;
 
-    my $def = $config->{"default"};
+    my $listdef = $config->{"default"};
     my $spamlevel = $config->{"spamlevel"};
     my $ns_from = $config->{"not_spam_if_from"};
     my $ns_subj = $config->{"not_spam_if_subject"};
@@ -170,14 +172,11 @@ sub approve_messages {
 
     my $count = keys (%{$info}) - 1;	# subtract 1 for globals
     my $num = 0;
-    my $prompt = 'Approve/Reject/Discard/Skip/view Body/view Full/Help/Quit';
-    $prompt .= " [" . uc($def) . "]" if $def;
-    $prompt .= " ? ";
-
+    my $prompt = 'Approve/Reject/Discard/Skip/view Body/view Full/jump #/Help/Quit';
+    my @num_to_id = grep { ! /^global$/ } sort keys %{$info};
  msgloop:
-    for my $id (sort keys %{$info}) {
-	next if $id eq "global";
-	++$num;
+    while ($num < $count) {
+	my $id = $num_to_id[$num++];
 	$from = $info->{$id}{"from"};
 	$subject = $info->{$id}{"subject"};
 	$reason = $info->{$id}{"reason"};
@@ -209,21 +208,32 @@ sub approve_messages {
 		}
 		$ans = "d";
 	    }
-	    
-	    $ans ||= prompt ($prompt);
+	    my $def = $listdef;
+	    $def = $change->{$id}->[0]
+		    if defined $change->{$id};
+	    my $pr = $prompt;
+	    $pr .= " [" . uc($def) . "]" if $def;
+	    $pr .= " ? ";
+	    $ans ||= prompt ($pr);
 	    $ans = "q" unless defined $ans;
 	    $ans =~ s/\s+//g;
-	    $ans = $def if $ans eq "";
+	    $ans = $def if $ans eq "" && defined $def;
 	    $ans = lc $ans;
 	    last msgloop if $ans eq "q";
 	    next msgloop if $ans eq "s";
+	    if ($ans =~ /^\d+$/ && $ans > 0 && $ans <= $count) {
+		$num = $ans - 1;
+		next msgloop;
+	    }
 	    if ($ans eq "a" || $ans eq "d") {
 		$change->{$id} = [ $ans ];
 		last;
 	    } elsif ($ans eq "r") {
 	    redo_reject:
-		my $r = prompt ("Why do you reject? ",
-					 $info->{$id}{"rejreason"});
+		my $def_reason = $info->{$id}{"rejreason"};
+		$def_reason = $change->{$id}->[1]
+			if defined $change->{$id} && $change->{$id}->[0] eq "r";
+		my $r = prompt ("Why do you reject? ", $def_reason);
 		if ($r =~ /^\s*$/) {
 		    print "aborted\n";
 		    next;
@@ -267,11 +277,12 @@ and pressing Return.
   s  Skip      -- don't decide now, leave it for later
   b  view Body -- display the first 20 lines of the message
   f  view Full -- display the complete message, including headers
+  #  jump      -- jump backward or forward to message number #
   q  Quit      -- go on to the next list
 
 end
-		print <<"end" if $def;
-The default action for this list when you only press Return is '$def'
+		print <<"end" if $listdef;
+The default action for this list when you only press Return is '$listdef'
 
 end
             }
