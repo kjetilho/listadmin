@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.20
+# listadmin version 2.21
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -385,8 +385,14 @@ sub get_list {
     my $headline = $parse->get_trimmed_text ("/h2") || die;
     if ($headline =~ /subscription/i) {
 	parse_subscriptions ($parse, \%data);
-	$parse->get_tag ("h2") || return (\%data);
-	$headline = $parse->get_trimmed_text ("/h2") || die;
+	my $token = $parse->get_token;
+	if (lc ($token->[1]) eq "input") {
+	    return () unless parse_footer ($parse, \%data, $mmver);
+	    return (\%data);
+	} else {
+	    $parse->get_tag ("h2") || die;
+	    $headline = $parse->get_trimmed_text ("/h2") || die;
+	}
     }
     if ($headline =~ /held for approval/i) {
 	$mmver = parse_approvals ($parse, \%data);
