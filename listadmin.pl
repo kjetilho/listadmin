@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.18
+# listadmin version 2.19
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -39,6 +39,8 @@ usage() unless getopts('f:t:');
 $rc = $opt_f if $opt_f;
 usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
 my $time_limit = time + 60 * ($opt_t || 24*60);
+my $hostname = `/bin/uname -n`;
+chomp($hostname);
 
 my $config = read_config ($rc);
 unless ($config) {
@@ -134,7 +136,7 @@ sub process_subscriptions {
     for my $id (sort keys %subscribers) {
 	last if time > $time_limit;
 	++$num;
-	print "\n[$num/$count] ======= \#$id of $list =======\n";
+	print "\n[$num/$count] ========== $list ==========\n";
 	print "From:    $subscribers{$id}\n";
 	print "         subscription request\n";
 	my $ans;
@@ -196,7 +198,7 @@ sub approve_messages {
 	$subject = $info->{$id}{"subject"} || "";
 	$reason = $info->{$id}{"reason"};
 	$spamscore = $info->{$id}{"spamscore"};
-	print "\n[$num/$count] ======= \#$id of $list =======\n";
+	print "\n[$num/$count] ========== $list ==========\n";
 	write;
 
 	while (1) {
@@ -261,7 +263,7 @@ sub approve_messages {
 		$change->{$id} = [ "r", $r ];
 		last;
 	    } elsif ($ans eq "f") {
-		print $info->{$id}{"headers"}, "\n", $info->{$id}{"body"};
+		print $info->{$id}{"headers"}, "\n\n", $info->{$id}{"body"};
 	    } elsif ($ans eq "b") {
 		my $head = lc $info->{$id}{"headers"};
 		my $text = $info->{$id}{"body"};
@@ -280,6 +282,9 @@ sub approve_messages {
 		my @lines = split (/\n/, $text, 21);
 		pop @lines;
 		print join ("\n", @lines), "\n";
+	    } elsif ($ans eq "url") {
+		print mailman_url($list, $config->{adminurl},
+				  $config->{user}), "\n";
 	    } elsif ($ans eq "") {
 		# nothing.
 	    } else {
@@ -310,9 +315,11 @@ end
 sub mailman_url {
     my ($list, $pattern, $user, $pw) = @_;
 
-    $pw =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
-
-    my $args = "username=$user&adminpw=$pw";
+    my $args = "username=$user";
+    if (defined $pw) {
+	$pw =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
+	$args .= "&adminpw=$pw";
+    }
     my ($lp, $domain) = split ('@', $list);
     if ($pattern) {
 	my $url = $pattern;
@@ -324,14 +331,15 @@ sub mailman_url {
 	return "$url?$args";
     }
 
-    my $www;
+    my $www = $domain;
     if ($domain eq "lister.ping.uio.no") {
 	return "https://$domain/mailman/$domain/admindb/$lp?$args";
     } elsif ($domain =~ /^(\w+)\.uio\.no$/) {
 	$www = "$1-lists.uio.no";
     } elsif ($domain eq "uio.no") {
 	$www = "uio-lists.uio.no";
-    } else {
+    } elsif ($hostname =~ /uio.no$/) {
+	# horrific.  this default should be split into a site specific file.
 	$www = "lister.uio.no";
     }
     return "http://$www/mailman/admindb/$list?$args";
@@ -532,6 +540,7 @@ sub parse_approval {
 	$body = $';
 	$headers = $`;
     }
+    $headers =~ s/^\s+//;
     $body .= "\n" unless $body =~ /\n$/;
     $data->{$id}->{"headers"} = $headers;
     $data->{$id}->{"body"} = $body;

@@ -1,10 +1,11 @@
-.TH LISTADMIN 1 "20 Jun 2003"
-
+.TH LISTADMIN 1 "20 Feb 2004"
+.\" turn off hyphenation
+.hy 0
 .SH NAME
 listadmin \- process messages held by Mailman for approval
 
 .SH SYNOPSIS
-.B "listadmin [-f \fIconfigfile\fP]"
+.B "listadmin [-f \fIconfigfile\fP] [-f \fIminutes\fP] [\fIlistname\fP]"
 
 .SH DESCRIPTION
 .I listadmin
@@ -14,28 +15,49 @@ mailing lists.
 .SH OPTIONS
 .IP "-f \fIconfigfile\fP"
 Fetch list of mailing lists from \fIconfigfile\fP rather than the
-default.
+default (\fB~/.listadmin.ini\fP).
+.IP "-t \fIminutes\fP"
+Stop processing after \fIminutes\fP has passed.  Mostly useful for
+completely automated configurations of \fBlistadmin\fP.
 
-.SH CONFIGURATION
+.IP "\fIlistname\fP"
+Only process the lists matching \fIlistname\fP.  Specify a complete
+address, a substring or a regular expression.
+
+.SH CONFIGURATION SYNTAX
 The configuration file contains lines which can contain either a
 comment, a directive, or a mailing list address.
 .PP
 A line can be continued by putting a backslash character at the end of
-the line.
+the line.  Any leading whitespace on the following line is removed.
 .PP
 Comments begin with the character # and extend to the end of line.
 Backslash continuation is not applied to comments.
 .PP
-Directives have effect for all following mailing lists.  The argument
-to the directive can be put in double quotes to protect any space
-characters in it.  Inside double quotes, \\" can be used to include a \""
-literal double quote, and \\\\ for a literal backslash.  The
-directives are:
+The argument to the directive can be put in double quotes to protect
+space characters.  Inside double quotes, \\" can be used to include a \""
+literal double quote, and \\\\ for a literal backslash.
+.PP
+.SH DIRECTIVES
+A directive affects all the mailing lists addresses which follow after
+it in the configuration file.  The directives are:
 .RS
 .IP "username \fIusername\fP"
 Specifies the username to use for authentication.
 .IP "password \fIpassword\fP"
 Specifies the password to use for authentication.
+.IP "adminurl \fIurl\fP"
+The URL for maintaining Mailman requests.  Some substitutions are
+performed: (examples below refer to the hypothetical list
+\fIfoo-devel@example.net\fP)
+.RS
+.IP "{list}"
+The local part of the list name, e.g., "foo-devel".
+.IP "{domain}"
+The domain part of the list name, e.g., "example.net".
+.IP "{subdomain}"
+The first component of the domain part, e.g., "example".
+.RE
 .IP "default \fIaction\fP"
 Specifies the action to take when the user presses just Return.
 Available actions are:
@@ -52,22 +74,57 @@ Don't decide now, leave it for later.
 Reset to no default action.
 .RE
 .IP "action \fIaction\fP"
-This action will be taken \fBalways\fP for all messages in the
-relevant lists, no user interaction will take place.  The same actions
-as for \fIdefault\fP are available, although reject and skip aren't
-very useful.
+This action will be taken for all messages where none of the other
+rules apply (e.g., \fIspamlevel\fP, \fIdiscard_if_from\fP etc.), ie.,
+whenever the user would have been asked what to do.  The same actions
+as for \fIdefault\fP are available, although reject isn't very useful.
 .IP "spamlevel \fInumber\fP"
 This specifies the threshold for automatic discard of suspected spam
 messages.  12 is unlikely to have false positives.  No user
 confirmation is needed, so it is best to play it safe.  Less than 5 is
 not recommended.
+.IP "not_spam_if_from \fIpattern\fP"
+If the message's From header matches the pattern, all automatic
+actions will be cancelled and you will be asked what action to take
+explicitly.  The pattern can use Perl regexp syntax.  If enclosed in
+slashes, some modifiers can be added, a typical example being
+\fB/pattern/i\fP to match case-insensitively.
+.IP "not_spam_if_subject \fIpattern\fP"
+As above, but matches against the Subject header.
+.IP "discard_if_from \fIpattern\fP"
+If the message's From header matches the pattern, it will be discarded
+automatically.
+.IP "discard_if_subject \fIpattern\fP"
+As above, but matches against the Subject header.
+.IP "discard_if_reason \fIpattern\fP"
+As above, but matches against Mailman's reason for holding the message
+for approval.
+.IP "subscription_default \fIaction\fP"
+Specifies the action to take when the user presses just Return while
+processing subscriptions.  Available actions are:
+.RS
+.IP "accept"
+The new subscriber will be added.
+.IP "reject"
+Notify sender that s/he was not allowed to join the list.
+.IP "skip"
+Don't decide now, leave it for later.
+.IP "none"
+Reset to no default action.
+.RE
+.IP "subscription_action \fIaction\fP"
+This action will be taken \fBalways\fP for all new subscribers in the
+relevant lists, no user interaction will take place.  The same actions
+as for \fIsubscription_default\fP are available, although only skip is
+very useful.  It is better to get automatic accept and reject
+behaviour by changing the Mailman configuration.
 .IP "confirm \fIyes|no\fP"
 Before submitting changes, ask for confirmation.  Default is "yes".
 .IP "log \fIfilename\fP"
 Changes submitted to the web interface are logged.  All the changes
-for one list are sent simultaneously.  The format in the log is first
-a line containing the list name and a time stamp in local time.  Then
-one line for each message, on the format
+for one list are sent in batches at the end of processing.  The format
+in the log is first a line containing the list name and a time stamp
+in local time.  Then one line for each message, in the format
 .IP
 \fIaction\fP D:[\fIdate\fP] F:[\fIsender\fP] S:[\fIsubject\fP]
 .IP
@@ -76,6 +133,44 @@ server\fP.
 .IP
 The filename \fBnone\fP turns off logging.
 .RE
+.SH EXAMPLE
+An example configuration file:
+.nf
+.ta +3m +4n
+	# A comment, it must appear on a line by itself.
+	#
+	# Settings affect all lists being listed after it.
+
+	username jdoe
+	password Geheim
+	default discard
+	# This one works for Sourceforge:
+	adminurl http://{domain}/lists/admindb/{list}
+
+	slartibartfast@lists.sourceforge.net
+
+	# This is how the default Mailman URLs look:
+	adminurl http://{domain}/mailman/admindb/{list}
+
+	# If the password contains quotes or spaces, you may need
+	# to put it in quotes.  A complex example:
+	password "\\"lise\\\\ "\""
+
+	# These lists will still use the username [jdoe], but the
+	# password is now ["lise\\ ].\""
+
+	default approve
+	discard_if_reason "Message has implicit|Too many recipients"
+        discard_if_from ^(postmaster|mailer(-daemon)?|listproc|no-reply)@
+
+	foo-devel@example.net
+
+	# No one should ever send e-mail to the next list, so throw it
+	# all away, without asking any questions
+	action discard
+	confirm no
+	foo-announce@example.net
+.fi
 
 .SH FILES
 .IP
@@ -84,10 +179,20 @@ The filename \fBnone\fP turns off logging.
 The default configuration file.
 
 .SH BUGS
-The HTML parser is very fragile and depends on Mailman not to change
+.PP
+The default behaviour with no adminurl specified in the configuration
+file is only useful at the University of Oslo.
+.PP
+The SpamAssassin score is fetched from the header X-Spam-Level, the
+value is the number of asterisks following.  It will also check a
+header specific to the University of Oslo.  If this does not match
+your setup, you will need to change the Perl code.  I'd be interested
+in ideas on how to best make this configurable.
+.PP
+The HTML parser is quite fragile and depends on Mailman not to change
 the format of its generated code.
 
 .SH AUTHOR
-Kjetil T. Homme <kjetilho@ifi.uio.no>
+Kjetil T. Homme <kjetilho+listadmin@ifi.uio.no>
 .br
 Send bug reports or feature requests to postmaster@uio.no
