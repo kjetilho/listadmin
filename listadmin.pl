@@ -1,6 +1,6 @@
 #! /local/bin/perl5
 #
-# listadmin version 2.11
+# listadmin version 2.12
 # Written 2003 by Kjetil Torgrim Homme <kjetilho@ifi.uio.no>
 # Released into public domain.
 
@@ -13,7 +13,7 @@ use Term::ReadLine;
 use IO::Handle;
 use strict;
 
-my $term = new Term::ReadLine 'listadmin';
+my $term;
 my $ua = new LWP::UserAgent ("timeout" => 600);
 my $rc = $ENV{"HOME"}."/.listadmin.ini";
 my $oldconf = $ENV{"HOME"}."/.listconf";
@@ -54,7 +54,7 @@ for my $list (sort {$config->{$a}{"order"} <=> $config->{$b}{"order"}}
     my $pw = $config->{$list}{"password"};
 
     print "fetching data for $list\n";
-    my $info = get_list ($list, $user, $pw);
+    my $info = get_list ($list, $config->{$list}{"adminurl"}, $user, $pw);
     my %change = ();
 
     process_subscriptions ($list, $info, $config->{$list}, \%change);
@@ -63,7 +63,7 @@ for my $list (sort {$config->{$a}{"order"} <=> $config->{$b}{"order"}}
     if ($config->{$list}->{"confirm"}) {
 	if (scalar %change) {
 	redo_confirm:
-	    my $c = $term->readline ("Submit changes? [yes] ");
+	    my $c = prompt ("Submit changes? [yes] ");
 	    if ($c =~ /^\s*(\?+|h|hj?elp)\s*$/i) {
 		print <<_END_;
 Nothing will be done to the messages in the administrative queue
@@ -78,8 +78,8 @@ _END_
 	}
     }
 
-    commit_changes ($list, $user, $pw, \%change, $info,
-		    $config->{$list}{"logfile"});
+    commit_changes ($list, $user, $pw, $config->{$list}{"adminurl"},
+		    \%change, $info, $config->{$list}{"logfile"});
 }
 
 sub process_subscriptions {
@@ -107,7 +107,7 @@ sub process_subscriptions {
 	my $ans;
 	while (1) {
 	    $ans = $config->{"subact"};
-	    $ans ||= $term->readline ($prompt);
+	    $ans ||= prompt ($prompt);
 	    $ans = "q" unless defined $ans;
 	    $ans =~ s/\s+//g;
 	    $ans = $def if $ans eq "";
@@ -118,7 +118,7 @@ sub process_subscriptions {
 		$change->{$id} = [ "sa" ];
 		last;
 	    } elsif ($ans eq "r") {
-		my $r = $term->readline ("Why do you reject? [optional] ");
+		my $r = prompt ("Why do you reject? [optional] ");
 		unless (defined $r) {
 
 		}
@@ -177,9 +177,9 @@ sub approve_messages {
 	    $ans ||= $config->{"action"};
 	    $match = "From" if got_match ($from, $dis_from);
 	    $match = "Subject"
-		    if $dis_subj && $subject =~ $dis_subj;
+		    if $dis_subj && got_match ($subject, $dis_subj);
 	    $match = "reason"
-		    if $dis_reas && $reason =~ $dis_reas;
+		    if $dis_reas && got_match ($reason, $dis_reas);
 	    $ans ||= "d" if $match;
 	    $ans = undef if (($ns_subj && $subject =~ $ns_subj) ||
 			     ($ns_from && $from =~ $ns_from));
@@ -193,7 +193,7 @@ sub approve_messages {
 		$ans = "d";
 	    }
 	    
-	    $ans ||= $term->readline ($prompt);
+	    $ans ||= prompt ($prompt);
 	    $ans = "q" unless defined $ans;
 	    $ans =~ s/\s+//g;
 	    $ans = $def if $ans eq "";
@@ -205,7 +205,7 @@ sub approve_messages {
 		last;
 	    } elsif ($ans eq "r") {
 	    redo_reject:
-		my $r = $term->readline ("Why do you reject? ",
+		my $r = prompt ("Why do you reject? ",
 					 $info->{$id}{"rejreason"});
 		if ($r =~ /^\s*$/) {
 		    print "aborted\n";
@@ -219,10 +219,21 @@ sub approve_messages {
 		$change->{$id} = [ "r", $r ];
 		last;
 	    } elsif ($ans eq "f") {
-		print $info->{$id}{"excerpt"};
+		print $info->{$id}{"headers"}, "\n", $info->{$id}{"body"};
 	    } elsif ($ans eq "b") {
-		my $text = $info->{$id}{"excerpt"};
-		$text =~ s/.*?\n\n//s;
+		my $head = lc $info->{$id}{"headers"};
+		my $text = $info->{$id}{"body"};
+		if ($head =~ /content-type:\s+text\/\S+\s+charset="?(iso-8859-15?|us-ascii|utf-8)"?/) {
+		    my $charset = $1;
+		    if ($head =~ /content-transfer-encoding: (base64|quoted-printable)/) {
+			if ($1 eq "base64") {
+			    $text = MIME::Base64::decode_base64($text);
+			} else {
+			    $text = MIME::QuotedPrint::decode($text);
+			}
+		    }
+		    $text = utf8_to_latin1 ($text) if $charset eq "utf-8";
+		}
 		my @lines = split (/\n/, $text, 21);
 		pop @lines;
 		print join ("\n", @lines), "\n";
@@ -253,12 +264,22 @@ end
 
 
 sub mailman_url {
-    my ($list, $user, $pw) = @_;
+    my ($list, $pattern, $user, $pw) = @_;
 
     $pw =~ s/(\W)/sprintf("%%%02x", ord($1))/ge;
 
     my $args = "username=$user&adminpw=$pw";
     my ($lp, $domain) = split ('@', $list);
+    if ($pattern) {
+	my $url = $pattern;
+	my $subdom = $domain;
+	$subdom = $` if $subdom =~ /\./;
+	$url =~ s/\{list\}/$lp/g;
+	$url =~ s/\{domain\}/$domain/g;
+	$url =~ s/\{subdomain\}/$subdom/g;
+	return "$url?$args";
+    }
+
     my $www;
     if ($domain eq "lister.ping.uio.no") {
 	return "https://$domain/mailman/$domain/admindb/$lp?$args";
@@ -273,7 +294,7 @@ sub mailman_url {
 }
 
 sub get_list {
-    my ($list, $user, $pw) = @_;
+    my ($list, $url, $user, $pw) = @_;
 
     # where we gather all the information about pending messages
     my %data = ();
@@ -281,7 +302,7 @@ sub get_list {
 
     my $page;
 
-    my $resp = $ua->get (mailman_url ($list, $user, $pw));
+    my $resp = $ua->get (mailman_url ($list, $url, $user, $pw));
     $page = $resp->content;
 
     # save it for eased debug for the developer...
@@ -384,7 +405,7 @@ sub utf8_to_latin1_char {
 
 sub parse_approval {
     my ($parse, $data) = @_;
-    my ($from, $reason, $subject, $id, $mmver);
+    my ($from, $reason, $subject, $id, $mmver, $body, $headers);
 
     $parse->get_tag ("tr") || die;
     $parse->get_tag ("td") || die;
@@ -411,6 +432,9 @@ sub parse_approval {
 	$reason = $parse->get_trimmed_text("/td");
     }
     my $utf8 = 0;
+
+    # this will also decode invalid tokens, where the encoded word is
+    # concatenated with other letters, e.g.  foo=?utf-8?q?=A0=F8?=
     $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?q\?(.*?)\?=/
 	MIME::QuotedPrint::decode($2)/ieg;
     $utf8 ||= 1 if $1 =~ /utf-8/i;
@@ -440,22 +464,27 @@ sub parse_approval {
     $parse->get_tag ("tr") || die; # Message Excerpt _or_ Headers
     $parse->get_tag ("td") || die;
     $parse->get_tag ("td") || die;
-    $data->{$id}->{"excerpt"} = $parse->get_text("/td");
+    $headers = $parse->get_text("/td");
     $data->{$id}->{"spamscore"} = 0;
     $data->{$id}->{"spamscore"} = length ($1)
-	    if $data->{$id}->{"excerpt"} =~ /^X-UiO-Spam-score: (s+)/m;
+	    if $headers =~ /^X-UiO-Spam-score: (s+)/m;
     $data->{$id}->{"date"} = "<no date>";
     $data->{$id}->{"date"} = $1
-	    if $data->{$id}->{"excerpt"} =~ /^Date: (.*)$/m;
+	    if $headers =~ /^Date: (.*)$/m;
 
     if ($mmver == 2) {
 	$parse->get_tag ("tr") || die;  # Message Excerpt
 	$parse->get_tag ("td") || die;
-	$parse->get_tag ("td") || die;
-	$data->{$id}->{"excerpt"} .= "\n".$parse->get_text("/td");
+	$parse->get_tag ("textarea") || die;
+	$body = $parse->get_text("/textarea");
+    } else {
+	$headers =~ s/\n\n//s;
+	$body = $';
+	$headers = $`;
     }
-    $data->{$id}->{"excerpt"} .= "\n"
-	    unless $data->{$id}->{"excerpt"} =~ /\n$/;
+    $body .= "\n" unless $body =~ /\n$/;
+    $data->{$id}->{"headers"} = $headers;
+    $data->{$id}->{"body"} = $body;
 
     return ($mmver);
 }
@@ -533,6 +562,7 @@ sub read_config {
     my $lineno = 0;
     my $logfile;
     my $confirm = 1;
+    my $url;
     my %patterns = map { $_ => undef; }
                        qw (not_spam_if_from
 			   not_spam_if_subject
@@ -597,6 +627,9 @@ sub read_config {
 		exit 1;
 	    }
 	    $action = $act{$action};
+	} elsif ($line =~ /^adminurl\s+/i) {
+	    $url = unquote ($'); # $POSTFIX
+	    $url = undef if $url eq "NONE";  # use UiO specific code
 	} elsif ($line =~ /^default\s+/i) {
 	    $default = unquote ($'); # $POSTFIX
 	    unless (exists $act{$default}) {
@@ -647,6 +680,7 @@ sub read_config {
 	} elsif ($line =~ /^([^@ \t]+@[^@])+\s*/) {
 	    $conf->{$line} = { "user" => $user,
 			       "password" => $pw,
+			       "adminurl" => $url,
 			       "spamlevel" => $spam,
 			       "confirm" => $confirm,
 			       "subact" => $subact,
@@ -681,7 +715,7 @@ sub prompt_for_config {
     my ($rc) = @_;
 
     print "No configuration file found: $rc\n";
-    my $ans = $term->readline ("Do you want to create one? [yes] ");
+    my $ans = prompt ("Do you want to create one? [yes] ");
     print "\n";
     if ($ans !~ /^\s*(|y|yes|j|ja)\s*$/i) {
 	print "I take that as a no.  Goodbye!\n";
@@ -692,10 +726,10 @@ sub prompt_for_config {
 	print STDERR "$rc: $!\n";
 	return undef;
     }
-    my $user = $term->readline ("Enter Mailman username: ");
+    my $user = prompt ("Enter Mailman username: ");
     print "\n";
     print RC "username $user\r\n";
-    my $pass = $term->readline ("Enter Mailman password (will appear on screen): ");
+    my $pass = prompt ("Enter Mailman password (will appear on screen): ");
     print "\n";
     $pass =~ s/"/\\"/g;
     print RC "password \"$pass\"\r\n";
@@ -704,7 +738,7 @@ sub prompt_for_config {
 Listadmin can discard messages with a high spam score automatically.
 A value in the interval 5 to 12 is recommended.
 END
-    my $spam = $term->readline ("What threshold do you want? [8]");
+    my $spam = prompt ("What threshold do you want? [8]");
     print "\n";
     $spam =~ s/\s*//g;
     $spam ||= "8";
@@ -734,7 +768,7 @@ line.
 END
     my $list;
     do {
-	$list = $term->readline ("> ");
+	$list = prompt ("> ");
 	print "\n";
 	$list =~ s/\s*//g;
 	print RC "$list\r\n" if $list;
@@ -752,9 +786,9 @@ END
 }
 
 sub commit_changes {
-    my ($list, $user, $pw, $change, $msgs, $logfile) = @_;
+    my ($list, $user, $pw, $url, $change, $msgs, $logfile) = @_;
 
-    my $baseurl = mailman_url ($list, $user, $pw);
+    my $baseurl = mailman_url ($list, $url, $user, $pw);
     my $action = $msgs->{"global"}{"actions"};
     my $changes = 0;
 
@@ -838,9 +872,17 @@ sub got_match {
     return undef unless defined ($str) && $pattern;
 
     # If the pattern is delimited by slashes, run it directly ...
-    if ($pattern =~ m,^/.*/[ix]*$,) {
-	eval "'$str' =~ $pattern";
+    if ($pattern =~ m,^/(.*)/([ix]*)$,) {
+	eval "\$str =~ $pattern";
     } else {
 	$str =~ $pattern;
     }
+}
+
+sub prompt {
+    # $term is a global variable.  we initialise it here, so that it
+    # is only done if the user actually needs prompting.
+    $term = new Term::ReadLine 'listadmin'
+	    unless $term;
+    return ($term->readline (@_));
 }
