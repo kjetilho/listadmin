@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.19
+# listadmin version 2.20
 # Written 2003, 2004 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -41,6 +41,8 @@ usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
 my $time_limit = time + 60 * ($opt_t || 24*60);
 my $hostname = `/bin/uname -n`;
 chomp($hostname);
+# Turn on autoflush on STDOUT
+$| = 1;
 
 my $config = read_config ($rc);
 unless ($config) {
@@ -383,7 +385,10 @@ sub get_list {
     my $headline = $parse->get_trimmed_text ("/h2") || die;
     if ($headline =~ /subscription/i) {
 	parse_subscriptions ($parse, \%data);
-    } elsif ($headline =~ /held for approval/i) {
+	$parse->get_tag ("h2") || return (\%data);
+	$headline = $parse->get_trimmed_text ("/h2") || die;
+    }
+    if ($headline =~ /held for approval/i) {
 	$mmver = parse_approvals ($parse, \%data);
     } else {
 	$parse->get_tag ("hr") || die;
@@ -850,11 +855,13 @@ sub commit_changes {
     my $baseurl = mailman_url ($list, $url, $user, $pw);
     my $action = $msgs->{"global"}{"actions"};
     my $changes = 0;
+    my $update_total = scalar (keys %{$change});
+    my $update_count = 0;
 
     my $log = log_timestamp ($list);
     $url = $baseurl;
 
-    for my $id (keys %{$change}) {
+    for my $id (sort { $a <=> $b } keys %{$change}) {
 	my ($what, $text) = @{$change->{$id}};
 	$url .= "&$id=" . $action->{$what};
 	unless ($what =~ /^s[ar]$/) {
@@ -883,6 +890,9 @@ sub commit_changes {
 	# keep the amount of work per request down.
 
 	if (length ($url) > 500) {
+	    $update_count += $changes;
+	    printf("sending %d updates to server, %d left    \r",
+		   $changes, $update_total - $update_count);
 	    submit_http ($url, $log, $logfile);
 	    $url = $baseurl;
 	    $log = log_timestamp ($list);
@@ -890,13 +900,14 @@ sub commit_changes {
 	    # even if time has run out, we will always submit at least
 	    # one batch of data.
 	    if (time > $time_limit) {
-		print "Time's up, won't submit the other changes\n";
+		print "\nTime's up, won't submit the other changes\n";
 		last;
 	    }
 	}
     }
     submit_http ($url, $log, $logfile)
 	    if $changes;
+    print (" " x 72, "\r") if $update_count > 0;
 }
 
 sub log_timestamp {
