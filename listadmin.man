@@ -5,15 +5,12 @@
 .if n .na
 .SH NAME
 listadmin \- process messages held by Mailman for approval
-
 .SH SYNOPSIS
 .B "listadmin [-f \fIconfigfile\fP] [-t \fIminutes\fP] [\fIlistname\fP]"
-
 .SH DESCRIPTION
 .I listadmin
 is a textual alternative to Mailman's WWW interface for administering
 mailing lists.
-
 .SH OPTIONS
 .IP "-f \fIconfigfile\fP"
 Fetch list of mailing lists from \fIconfigfile\fP rather than the
@@ -21,25 +18,24 @@ default (\fB~/.listadmin.ini\fP).
 .IP "-t \fIminutes\fP"
 Stop processing after \fIminutes\fP has passed.  Mostly useful for
 completely automated configurations of \fBlistadmin\fP.
-
 .IP "\fIlistname\fP"
 Only process the lists matching \fIlistname\fP.  Specify a complete
 address, a substring or a regular expression.
-
 .SH CONFIGURATION SYNTAX
+
 The configuration file contains lines which can contain either a
 comment, a directive, or a mailing list address.
-.PP
+
 A line can be continued by putting a backslash character at the end of
 the line.  Any leading whitespace on the following line is removed.
-.PP
+
 Comments begin with the character # and extend to the end of line.
 Backslash continuation is not applied to comments.
-.PP
+
 The argument to the directive can be put in double quotes to protect
 space characters.  Inside double quotes, \\" can be used to include a \""
 literal double quote, and \\\\ for a literal backslash.
-.PP
+
 .SH DIRECTIVES
 A directive affects all the mailing lists addresses which follow after
 it in the configuration file.  The directives are:
@@ -135,6 +131,42 @@ server\fP.
 .IP
 The filename \fBnone\fP turns off logging.
 .RE
+.SH INTERACTIVE USE
+
+The user interface to \fBlistadmin\fP is line oriented with single
+letter commands.  By pressing Return, the default action is chosen.
+The default action is printed in brackets in the prompt.  The
+available actions are:
+
+.RS
+.IP a
+Approve sending the message to all members of the list.
+.IP r
+Reject the message and notify sender of the decision.
+.IP d
+Discard the message silently, don't notify sender.
+.IP s
+Skip the message, leave its status as pending unchanged.
+.IP b
+View Body, display the first 20 lines of the message.
+.IP f
+View Full, display the complete message, including headers.
+.IP \fInumber\fP
+Jump forward or backward to message \fInumber\fP.
+.IP /\fIpattern\fP
+Search (case-insensitively) for the next message with matching From or
+Subject.  If \fIpattern\fP is left out, the previous value will be
+used.
+.IP ?\fIpattern\fP
+As above, but backwards.
+.IP q
+Quit processing this list and go on to the next.
+.RE
+
+Changes will not take effect until the end of the list has been
+reached.  At that time, the user will be prompted whether the changes
+should be submitted to Mailman (see also "confirm" directive above).
+
 .SH EXAMPLE
 An example configuration file:
 .nf
@@ -180,21 +212,20 @@ An example configuration file:
 The default configuration file.
 
 .SH BUGS
-.PP
 The default behaviour with no adminurl specified in the configuration
 file is only useful at the University of Oslo.
-.PP
+
 The SpamAssassin score is fetched from the header X-Spam-Level, the
 value is the number of asterisks following.  It will also check a
 header specific to the University of Oslo.  If this does not match
 your setup, you will need to change the Perl code.  I'd be interested
 in ideas on how to best make this configurable.
-.PP
+
 The HTML parser is quite fragile and depends on Mailman not to change
 the format of its generated code.
-.PP
+
 Mailman 2.1 is not supported.
-.PP
+
 ISO 8859-1 environment is assumed.
 
 .SH AUTHOR
