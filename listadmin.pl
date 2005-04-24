@@ -193,6 +193,7 @@ sub approve_messages {
 
     my $count = keys (%{$info}) - 1;	# subtract 1 for globals
     my $num = 0;
+    my $search_pattern = "";
     my $prompt = 'Approve/Reject/Discard/Skip/view Body/view Full/jump #/Help/Quit';
     my @num_to_id = grep { ! /^global$/ } sort keys %{$info};
  msgloop:
@@ -252,6 +253,32 @@ sub approve_messages {
 	    } elsif ($ans eq "a" || $ans eq "d") {
 		$change->{$id} = [ $ans ];
 		last;
+	    } elsif ($ans =~ m,([/?])(.*),) {
+		my $i = $num - 1;
+		my $direction = 1;
+		my $fencepost = $count - 1;
+		if ($1 eq "?") {
+		    $direction = -1;
+		    $fencepost = 1;
+		}
+		# If no pattern is specified, reuse previous pattern.
+		$search_pattern = $2 unless $2 eq "";
+		if ($search_pattern eq "") {
+		    print "No search pattern specified.  Try 'help'\n";
+		    next;
+		}
+		while ($i != $fencepost) {
+		    $i += $direction;
+		    my $id = $num_to_id[$i];
+		    my $search_from = $info->{$id}{"from"};
+		    my $search_subject = $info->{$id}{"subject"} || "";
+		    if ($search_from =~ /$search_pattern/i ||
+			$search_subject =~ /$search_pattern/i) {
+			$num = $i;
+			next msgloop;
+		    }
+		}
+		print "Pattern not found\n"
 	    } elsif ($ans eq "r") {
 	    redo_reject:
 		my $def_reason = $info->{$id}{"rejreason"};
@@ -299,13 +326,15 @@ sub approve_messages {
 Choose one of the following actions by typing the corresponding letter
 and pressing Return.
 
-  a  Approve   -- the message will be sent to all member of the list
+  a  Approve   -- the message will be sent to all members of the list
   r  Reject    -- notify sender that the message was rejected
   d  Discard   -- throw message away, don't notify sender
   s  Skip      -- don't decide now, leave it for later
   b  view Body -- display the first 20 lines of the message
   f  view Full -- display the complete message, including headers
   #  jump      -- jump backward or forward to message number #
+  /pattern     -- search for next message with matching From or Subject
+  ?pattern     -- search for previous message with matching From or Subject
   q  Quit      -- go on to the next list
 
 end
