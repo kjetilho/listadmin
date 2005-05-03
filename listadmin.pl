@@ -92,7 +92,9 @@ for my $list (@lists) {
     my %change = ();
 
     process_subscriptions ($list, $info, $config->{$list}, \%change);
-    approve_messages ($list, $info, $config->{$list}, \%change);
+    my $num = undef;
+ restart_approval:
+    approve_messages ($list, $info, $config->{$list}, \%change, $num);
 
     if ($config->{$list}->{"confirm"}) {
 	if (scalar %change) {
@@ -108,6 +110,9 @@ _END_
 	    if ($c =~ /^\s*(no?|nei|skip)\s*$/i) {
 		print "skipping ...\n";
 		next;
+	    } elsif ($c =~ /^\d$/) {
+		$num = $c - 1;
+		goto restart_approval;
 	    } elsif ($c !~ /^\s*(|ja?|y|yes)\s*$/i) {
 		goto redo_confirm;
 	    }
@@ -181,7 +186,7 @@ end
 }
 
 sub approve_messages {
-    my ($list, $info, $config, $change) = @_;
+    my ($list, $info, $config, $change, $num) = @_;
 
     my $listdef = $config->{"default"};
     my $spamlevel = $config->{"spamlevel"};
@@ -192,8 +197,13 @@ sub approve_messages {
     my $dis_reas = $config->{"discard_if_reason"};
 
     my $count = keys (%{$info}) - 1;	# subtract 1 for globals
-    my $num = 0;
     my $search_pattern = "";
+    my $dont_skip_forward = 0;
+    if (!defined ($num)) {
+	$num = 0;
+    } else {
+	$dont_skip_forward = 1;
+    }
     my $prompt = 'Approve/Reject/Discard/Skip/view Body/view Full/jump #/Help/Quit';
     my @num_to_id = grep { ! /^global$/ } sort keys %{$info};
  msgloop:
@@ -221,7 +231,8 @@ sub approve_messages {
 		    if $dis_reas && got_match ($reason, $dis_reas);
 	    $ans ||= "d" if $match;
 	    $ans = undef if (($ns_subj && $subject =~ $ns_subj) ||
-			     ($ns_from && $from =~ $ns_from));
+			     ($ns_from && $from =~ $ns_from) ||
+			     $dont_skip_forward);
 
 	    if ($ans && $match) {
 		if ($match eq "spam") {
@@ -246,12 +257,15 @@ sub approve_messages {
 		last msgloop;
 	    } elsif ($ans eq "s") {
 		delete $change->{$id};
+		$dont_skip_forward = 0;
 		next msgloop;
 	    } elsif ($ans =~ /^\d+$/ && $ans > 0 && $ans <= $count) {
 		$num = $ans - 1;
+		$dont_skip_forward = 1;
 		next msgloop;
 	    } elsif ($ans eq "a" || $ans eq "d") {
 		$change->{$id} = [ $ans ];
+		$dont_skip_forward = 0;
 		last;
 	    } elsif ($ans =~ m,([/?])(.*),) {
 		my $i = $num - 1;
@@ -275,6 +289,7 @@ sub approve_messages {
 		    if ($search_from =~ /$search_pattern/i ||
 			$search_subject =~ /$search_pattern/i) {
 			$num = $i;
+			$dont_skip_forward = 1;
 			next msgloop;
 		    }
 		}
@@ -295,6 +310,7 @@ sub approve_messages {
 		}
 
 		$change->{$id} = [ "r", $r ];
+		$dont_skip_forward = 0;
 		last;
 	    } elsif ($ans eq "f") {
 		print $info->{$id}{"headers"}, "\n\n", $info->{$id}{"body"};
