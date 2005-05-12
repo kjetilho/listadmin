@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.25
+# listadmin version 2.26
 # Written 2003 - 2005 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
