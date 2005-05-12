@@ -377,32 +377,32 @@ sub mailman_params {
     return \%params;
 }
 
+sub uio_adminurl {
+    my ($domain) = @_;
+    return 'https://{domain}/mailman/{domain}/admindb/{list}'
+	    if ($domain eq 'lister.ping.uio.no');
+    return 'http://{domain}/mailman/admindb/{list}@{domain}'
+	    if ($domain eq "lister.uio.no");
+    return 'http://{subdomain}-lists.uio.no/mailman/admindb/{list}@{domain}'
+	    if ($domain =~ /^(\w+\.)?uio\.no$/);
+    undef;
+}
+
 sub mailman_url {
     my ($list, $pattern) = @_;
 
     my ($lp, $domain) = split ('@', $list);
-    if ($pattern) {
-	my $url = $pattern;
-	my $subdom = $domain;
-	$subdom = $` if $subdom =~ /\./;
-	$url =~ s/\{list\}/$lp/g;
-	$url =~ s/\{domain\}/$domain/g;
-	$url =~ s/\{subdomain\}/$subdom/g;
-	return $url;
-    }
 
-    my $www = $domain;
-    if ($domain eq "lister.ping.uio.no") {
-	return "https://$domain/mailman/$domain/admindb/$lp";
-    } elsif ($domain =~ /^(\w+)\.uio\.no$/) {
-	$www = "$1-lists.uio.no";
-    } elsif ($domain eq "uio.no") {
-	$www = "uio-lists.uio.no";
-    } elsif ($hostname =~ /uio.no$/) {
-	# horrific.  this default should be split into a site specific file.
-	$www = "lister.uio.no";
-    }
-    return "http://$www/mailman/admindb/$list";
+    $pattern ||= uio_adminurl ($domain);
+    $pattern ||= 'http://{domain}/mailman/admindb/{list}';
+
+    my $url = $pattern;
+    my $subdom = $domain;
+    $subdom = $` if $subdom =~ /\./;
+    $url =~ s/\{list\}/$lp/g;
+    $url =~ s/\{domain\}/$domain/g;
+    $url =~ s/\{subdomain\}/$subdom/g;
+    return $url;
 }
 
 sub get_list {

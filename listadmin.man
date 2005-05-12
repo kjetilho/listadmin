@@ -212,9 +212,6 @@ An example configuration file:
 The default configuration file.
 
 .SH BUGS
-The default behaviour with no adminurl specified in the configuration
-file is only useful at the University of Oslo.
-
 The SpamAssassin score is fetched from the header X-Spam-Level, the
 value is the number of asterisks following.  It will also check a
 header specific to the University of Oslo.  If this does not match
