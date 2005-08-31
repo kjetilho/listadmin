@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.26
+# listadmin version 2.27
 # Written 2003 - 2005 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 # Released into public domain.
@@ -606,7 +606,7 @@ sub parse_approval {
 	$body = $parse->get_text("/textarea");
     } else {
 	$headers =~ s/\n\n//s;
-	$body = $';
+	$body = $';	# ' # stupid perl-mode
 	$headers = $`;
     }
     $headers =~ s/^\s+//;
@@ -709,6 +709,7 @@ sub read_config {
 	++$lineno;
 	chomp;
 	s/\r$//;
+	s/\s+$//;		# trailing whitespace is "always" unintended
 	next if /^\s*#/;
 	s/^\s+// if $line;	# remove leading whitespace after continuation
 	if (/\\$/) {
@@ -719,15 +720,15 @@ sub read_config {
 	$line =~ s/^\s+//;
 	next if /^$/;
 	if ($line =~ /^username\s+/i) {
-	    $user = unquote ($'); # $POSTFIX
+	    $user = unquote ($');	# ' stupid perl-mode
 	    if ($user !~ /^[a-z0-9._+-]+\@[a-z0-9.-]+$/) {
 		print STDERR "$file:$lineno: Illegal username: '$user'\n";
 		exit 1;
 	    }
 	} elsif ($line =~ /^password\s+/i) {
-	    $pw = unquote ($');
+	    $pw = unquote ($');		# ' stupid perl-mode
 	} elsif ($line =~ /^spamlevel\s+/i) {
-	    $spam = unquote ($');
+	    $spam = unquote ($');	# ' stupid perl-mode
 	    if ($spam =~ /^(\d+)\s*$/) {
 		$spam = $1;
 	    } else {
@@ -736,7 +737,7 @@ sub read_config {
 		exit 1;
 	    }
 	} elsif ($line =~ /^confirm\s+/i) {
-	    $confirm = unquote ($');
+	    $confirm = unquote ($');	# ' stupid perl-mode
 	    if ($confirm eq "yes") {
 		$confirm = 1;
 	    } elsif ($confirm eq "no") {
@@ -747,7 +748,7 @@ sub read_config {
 		exit 1;
 	    }
 	} elsif ($line =~ /^action\s+/i) {
-	    $action = unquote ($'); # $POSTFIX
+	    $action = unquote ($');	# ' stupid perl-mode
 	    unless (exists $act{$action}) {
 		print STDERR "$file:$lineno: Illegal value: '$action'\n";
 		print STDERR "choose one of ",
@@ -756,10 +757,10 @@ sub read_config {
 	    }
 	    $action = $act{$action};
 	} elsif ($line =~ /^adminurl\s+/i) {
-	    $url = unquote ($'); # $POSTFIX
-	    $url = undef if $url eq "NONE";  # use UiO specific code
+	    $url = unquote ($');	# ' stupid perl-mode
+	    $url = undef if $url eq "NONE";
 	} elsif ($line =~ /^default\s+/i) {
-	    $default = unquote ($'); # $POSTFIX
+	    $default = unquote ($');	# ' stupid perl-mode
 	    unless (exists $act{$default}) {
 		print STDERR "$file:$lineno: Illegal value: '$default'\n";
 		print STDERR "choose one of ",
@@ -768,7 +769,7 @@ sub read_config {
 	    }
 	    $default = $act{$default};
 	} elsif ($line =~ /^log\s+/i) {
-	    $logfile = unquote ($'); # $POSTFIX
+	    $logfile = unquote ($');	# ' stupid perl-mode
 	    $logfile =~ s,^\$HOME/,$ENV{'HOME'}/,;
 	    $logfile =~ s,^~/,$ENV{'HOME'}/,;
 	    $logfile =~ s,^~(\w+)/,(getpwnam($1))[7]."/",e;
@@ -778,7 +779,7 @@ sub read_config {
 	    }
 	    $logfile = undef if $logfile eq "none";
 	} elsif ($line =~ /^subscription_action\s+/) {
-	    $subact = unquote ($');
+	    $subact = unquote ($');	# ' stupid perl-mode
 	    unless (exists $sact{$subact}) {
 		print STDERR "$file:$lineno: Illegal value: '$subact'\n";
 		print STDERR "choose one of ",
@@ -787,7 +788,7 @@ sub read_config {
 	    }
 	    $subact = $sact{$subact};
 	} elsif ($line =~ /^subscription_default\s+/) {
-	    $subdef = unquote ($');
+	    $subdef = unquote ($');	# ' stupid perl-mode
 	    unless (exists $sact{$subdef}) {
 		print STDERR "$file:$lineno: Illegal value: '$subdef'\n";
 		print STDERR "choose one of ",
@@ -797,7 +798,7 @@ sub read_config {
 	    $subdef = $sact{$subdef};
 	} elsif ($line =~ /^($pattern_keywords)\s+/o) {
 	    my $key = $1;
-	    my $val = $'; # $POSTFIX
+	    my $val = $';	# ' stupid perl-mode
 	    $val =~ s/\s+$//;
 	    if ($val =~ /^"(.*)"$/) {
 		$val = $1;
