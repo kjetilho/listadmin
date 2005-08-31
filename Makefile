@@ -1,7 +1,7 @@
 SHELL = /bin/sh
 INSTALL = install -c
 
-VERSION = 2.26
+VERSION = 2.27
 
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
@@ -37,7 +37,8 @@ distclean:
 # for my use only
 WWW_DOCS = /hom/kjetilho/www_docs/hacks
 publish: dist
-	cp listadmin.txt $(WWW_DOCS)/listadmin.txt
-	cp $(TARFILE) $(WWW_DOCS)/
-	cp listadmin.pl $(WWW_DOCS)/listadmin
-	perl -pi -e 's/listadmin-\d+\.\d+/listadmin-'$(VERSION)'/g' $(WWW_DOCS)/index.html
+	cp -p listadmin.txt $(WWW_DOCS)/listadmin.txt
+	cp -p $(TARFILE) $(WWW_DOCS)/
+	cp -p listadmin.pl $(WWW_DOCS)/listadmin
+	cp -p listadmin.man $(WWW_DOCS)/listadmin.man
+	perl -pi -e 's/listadmin(.)\d+\.\d+/listadmin$${1}'$(VERSION)'/g' $(WWW_DOCS)/index.html
