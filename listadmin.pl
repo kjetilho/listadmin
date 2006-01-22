@@ -385,6 +385,8 @@ sub uio_adminurl {
 	    if ($domain eq "lister.uio.no");
     return 'http://{subdomain}-lists.uio.no/mailman/admindb/{list}@{domain}'
 	    if ($domain =~ /^(\w+\.)?uio\.no$/);
+    return 'http://lists.{domain}/mailman/admindb/{list}@{domain}'
+	    if ($domain eq "simula.no");
     undef;
 }
 
