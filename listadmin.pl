@@ -3,7 +3,11 @@
 # listadmin version 2.27
 # Written 2003 - 2006 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
-# Mailman 2.1 support by Sam Watkins
+#
+
+# Thank you, Sam Watkins and Bernie Hoeneisen, for contributions and
+# feedback.
+
 #
 # Released into public domain.
 
@@ -17,7 +21,6 @@ use Getopt::Std;
 use strict;
 
 my $rc = $ENV{"HOME"}."/.listadmin.ini";
-my $oldconf = $ENV{"HOME"}."/.listconf";
 
 sub usage {
     print STDERR <<_end_;
@@ -33,7 +36,6 @@ _end_
 
 my $term;
 my $ua = new LWP::UserAgent ("timeout" => 600);
-upgrade_config($oldconf, $rc);
 
 our ($opt_f, $opt_t);
 
@@ -647,15 +649,16 @@ sub parse_approval {
     $parse->get_tag ("td") || die;
     $parse->get_tag ("td") || die;
     $headers = $parse->get_text("/td");
-    $data->{$id}->{"spamscore"} = 0;
-    $data->{$id}->{"spamscore"} = length ($1)
-	    if $headers =~ /^X-Spam-(?:Level|Score):\s+(\S+)/im;
-    $data->{$id}->{"spamscore"} = length ($1)
-	    if $headers =~ /^X-UiO-Spam-score: (s+)/m;
+    # Extract the length from all spam score headers, sort them in
+    # descending order, and pick the front (max) element:
+    my ($score) = \
+	    sort {$b <=> $a} \
+	    map {length} \
+	    $headers =~ /^X-\S*spam-(?:level|score):\s+(\S+)/gim;
+    $data->{$id}->{"spamscore"} = $score || 0;
     $data->{$id}->{"date"} = "<no date>";
     $data->{$id}->{"date"} = $1
 	    if $headers =~ /^Date: (.*)$/m;
-
     if ($mmver ge "2.0") {
 	$parse->get_tag ("tr") || die;  # Message Excerpt
 	$parse->get_tag ("td") || die;
@@ -692,31 +695,6 @@ sub set_param_values {
 					 "sr" => 0, # subscribe reject
 				     };
     }
-}
-
-# .listconf was the configuration file for the previous listadmin
-# script, which was written in Bash and simply sourced the file...
-sub upgrade_config {
-    my ($conf, $rc) = @_;
-    return if -f $rc;
-    return unless -f $conf;
-
-    print "Converting to new configuration file, $rc\n\n";
-
-    my $cmd = ". $conf; umask 077; (". <<'END' . ") > $rc";
-      printf "# automatically converted from .listconf\r\n";
-      printf "#\r\n";
-      printf "username $LISTUSER\r\n";
-      printf "password \"$LISTPASS\"\r\n";
-      printf "spamlevel 12\r\n";
-      printf "not_spam_if_from uio\.no\n";
-      printf "default discard\r\n";
-      printf "# uncomment the following to get a terse transaction log\r\n";
-      printf "# log \"~/.listadmin.log\"\r\n";
-      printf "\r\n";
-      for l in $LISTS; do printf "$l\r\n"; done
-END
-    system $cmd;
 }
 
 sub read_config {
@@ -914,7 +892,7 @@ sub prompt_for_config {
     my $user = prompt ("Enter Mailman username: ");
     print "\n";
     print RC "username $user\r\n";
-    my $pass = prompt ("Enter Mailman password (will appear on screen): ");
+    my $pass = prompt_password("Enter Mailman password: ");
     print "\n";
     $pass =~ s/"/\\"/g;
     print RC "password \"$pass\"\r\n";
@@ -955,7 +933,7 @@ END
     do {
 	$list = prompt ("> ");
 	print "\n";
-	$list =~ s/\s*//g;
+	$list =~ s/\s*//g if $list;
 	print RC "$list\r\n" if $list;
     } while ($list);
     close (RC);
@@ -1078,6 +1056,32 @@ sub got_match {
     }
 }
 
+sub restore_echo_and_exit {
+    system("stty echo");
+    print "\n";
+    exit(1);
+}
+
+sub prompt_password {
+    my ($prompt) = @_;
+    my $answer;
+    my $echooff;
+
+    $SIG{'INT'} = $SIG{'TERM'} = \&restore_echo_and_exit;
+    system("stty -echo 2>/dev/null");
+    if ($? == 0) {
+	$echooff = 1;
+    } else {
+	$prompt .= "(will appear on screen): ";
+    }
+    $answer = prompt($prompt);
+    if ($echooff) {
+	system("stty echo");
+	$SIG{'INT'} = $SIG{'TERM'} = 'DEFAULT';
+    }
+    return $answer;
+}
+    
 sub prompt {
     # $term is a global variable.  we initialise it here, so that it
     # is only done if the user actually needs prompting.
