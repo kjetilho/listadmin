@@ -660,12 +660,19 @@ sub parse_approval {
     $parse->get_tag ("td") || die;
     $parse->get_tag ("td") || die;
     $headers = $parse->get_text("/td");
+
+    # We handle spam score headers on the formats:
+    #   X-spam-score: *****
+    #   X-spam-score: 4.23 (****)
+    #
+    # The name of the header is flexible.
+    # 
     # Extract the length from all spam score headers, sort them in
     # descending order, and pick the front (max) element:
-    my ($score) = \
-	    sort {$b <=> $a} \
-	    map {length} \
-	    $headers =~ /^X-\S*spam-(?:level|score):\s+(\S+)/gim;
+    my ($score) = sort {$b <=> $a}
+                  map {length} 
+                  $headers =~ /^X-\S*spam-(?:level|score):\s+
+			       (?:\d+\.\d+\s+)? \(?(\S+)\)?/xgim;
     $data->{$id}->{"spamscore"} = $score || 0;
     $data->{$id}->{"date"} = "<no date>";
     $data->{$id}->{"date"} = $1
