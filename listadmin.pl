@@ -91,8 +91,19 @@ for my $list (@lists) {
 	print "Time's up, skipping the remaining lists\n";
 	last;
     }
+
+    my $info = {};
     print "fetching data for $list\n";
-    my $info = get_list ($list, $config->{$list}{"adminurl"}, $user, $pw);
+    do {
+	if ($pw eq "" || $info->{'autherror'}) {
+	    $pw = prompt_password("Enter password" .
+				  ($user ? " for $user: ": ": "));
+	}
+	$info = get_list ($list, $config->{$list}{"adminurl"}, $user, $pw)
+		if $pw;
+    } while ($info->{'autherror'} && $pw);
+    next if $info->{'servererror'} || $info->{'autherror'};
+
     my %change = ();
 
     process_subscriptions ($list, $info, $config->{$list}, \%change);
@@ -423,7 +434,7 @@ sub get_list {
 			 mailman_params($user, $pw));
     unless ($resp->is_success) {
 	print STDERR $resp->error_as_HTML;
-	return ();
+	return {'servererror' => 1};
     }
     $page = $resp->content;
 
@@ -433,7 +444,7 @@ sub get_list {
     if ($title =~ /authentication/i) {
 	print STDERR
 		"Unable to log in. Is your username and password correct?\n";
-	return ();
+	return {'autherror' => 1};
     }
 
     my @mailman_mentions = grep {/Mailman/} split (/\n/, $page);
@@ -449,7 +460,7 @@ sub get_list {
 			  mailman_params($user, $pw));
 	unless ($resp->is_success) {
 	    print STDERR $resp->error_as_HTML;
-	    return ();
+	    return {'servererror' => 1};
 	}
 	$page_appr = $resp->content;
     }
@@ -1076,6 +1087,7 @@ sub prompt_password {
     }
     $answer = prompt($prompt);
     if ($echooff) {
+	print "\n";
 	system("stty echo");
 	$SIG{'INT'} = $SIG{'TERM'} = 'DEFAULT';
     }
