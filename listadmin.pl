@@ -1,8 +1,10 @@
 #! /usr/bin/perl -w
 #
 # listadmin version 2.27
-# Written 2003 - 2005 by
+# Written 2003 - 2006 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
+# Mailman 2.1 support by Sam Watkins
+#
 # Released into public domain.
 
 use HTML::TokeParser;
@@ -333,8 +335,7 @@ sub approve_messages {
 		pop @lines;
 		print join ("\n", @lines), "\n";
 	    } elsif ($ans eq "url") {
-		print mailman_url($list, $config->{adminurl},
-				  $config->{user}), "\n";
+		print mailman_url($list, $config->{adminurl}), "\n";
 	    } elsif ($ans eq "") {
 		# nothing.
 	    } else {
@@ -371,7 +372,7 @@ sub url_quote_parameter {
 
 sub mailman_params {
     my ($user, $pw) = @_;
-    my %params = ();
+    my %params;
     $params{"username"} = $user if defined $user;
     $params{"adminpw"} = $pw if defined $pw;
     return \%params;
@@ -391,7 +392,7 @@ sub uio_adminurl {
 }
 
 sub mailman_url {
-    my ($list, $pattern) = @_;
+    my ($list, $pattern, $params) = @_;
 
     my ($lp, $domain) = split ('@', $list);
 
@@ -404,33 +405,27 @@ sub mailman_url {
     $url =~ s/\{list\}/$lp/g;
     $url =~ s/\{domain\}/$domain/g;
     $url =~ s/\{subdomain\}/$subdom/g;
+    $url .= "?$params" if $params;
     return $url;
 }
 
+# Returns a ref to a hash with all the information about pending messages
 sub get_list {
     my ($list, $url, $user, $pw) = @_;
 
-    # where we gather all the information about pending messages
-    my %data = ();
     my $starttime = time;
+    my $mmver;
+    my ($page, $page_appr, $resp_appr);
 
-    my $page;
-
-    my $resp = $ua->post (mailman_url($list, $url), mailman_params($user, $pw));
-    $page = $resp->content;
-
-    # save it for eased debug for the developer...
-    if ($< == 1232 && open (DUMP, ">/tmp/dump-$list.html")) {
-	print DUMP $page;
-	close (DUMP);
-    }
-
+    my $resp = $ua->post(mailman_url($list, $url),
+			 mailman_params($user, $pw));
     unless ($resp->is_success) {
 	print STDERR $resp->error_as_HTML;
 	return ();
     }
-    my $parse = HTML::TokeParser->new(\$page) || die;
+    $page = $resp->content;
 
+    my $parse = HTML::TokeParser->new(\$page) || die;
     $parse->get_tag ("title") || die;
     my $title = $parse->get_trimmed_text ("/title") || die;
     if ($title =~ /authentication/i) {
@@ -438,16 +433,60 @@ sub get_list {
 		"Unable to log in. Is your username and password correct?\n";
 	return ();
     }
-    my $mmver;
 
+    my @mailman_mentions = grep {/Mailman/} split (/\n/, $page);
+    my $last_mention = pop(@mailman_mentions);
+    die "Can not find version information in '$last_mention'\n"
+	    unless $last_mention =~ /\bv(ersion)?\s(\d+\.\d+)/;
+    $mmver = $2;
+
+    if ($mmver ge "2.1") {
+	# Mailman does not look for "details" in parameters, so it
+	# must be part of the query string.
+	$resp = $ua->post(mailman_url($list, $url, "details=all"),
+			  mailman_params($user, $pw));
+	unless ($resp->is_success) {
+	    print STDERR $resp->error_as_HTML;
+	    return ();
+	}
+	$page_appr = $resp->content;
+    }
+
+    my $dumpdir = $config->{$list}{"dumpdir"};
+    if (defined $dumpdir) {
+	if (open (DUMP, ">$dumpdir/dump-subs-$list.html")) {
+	    print DUMP $page;
+	    close (DUMP);
+	}
+	if ($page_appr && open (DUMP, ">$dumpdir/dump-held-$list.html")) {
+	    print DUMP $page_appr;
+	    close (DUMP);
+	}
+    }
+
+    my $data;
+    if ($mmver eq "2.1") {
+	my $parse_appr = HTML::TokeParser->new(\$page_appr) || die;
+	$data = parse_pages_mm_2_1($mmver, $parse, $parse_appr);
+    } else {
+	$data = parse_pages_mm_old($mmver, $parse);
+    }
+    set_param_values($mmver, $data);
+    return $data;
+}
+
+sub parse_pages_mm_old {
+    my ($mmver, $parse) = @_;
+
+    my %data = ();
+    my $token;
     $parse->get_tag ("hr");
     $parse->get_tag ("h2") || return ();
     my $headline = $parse->get_trimmed_text ("/h2") || die;
     if ($headline =~ /subscription/i) {
 	parse_subscriptions ($parse, \%data);
-	my $token = $parse->get_token;
+	$token = $parse->get_token;
 	if (lc ($token->[1]) eq "input") {
-	    return () unless parse_footer ($parse, \%data, $mmver);
 	    return (\%data);
 	} else {
 	    $parse->get_tag ("h2") || die;
@@ -455,15 +494,32 @@ sub get_list {
 	}
     }
     if ($headline =~ /held for approval/i) {
-	$mmver = parse_approvals ($parse, \%data);
+	parse_approvals ($parse, \%data, $mmver);
     } else {
 	$parse->get_tag ("hr") || die;
-	my $token = $parse->get_token;
+	$token = $parse->get_token;
 	if ($token->[0] eq "S" && lc ($token->[1]) eq "center") {
-	    $mmver = parse_approvals ($parse, \%data);
+	    parse_approvals ($parse, \%data, $mmver);
 	}
     }
-    return () unless parse_footer ($parse, \%data, $mmver);
+    return (\%data);
+}
+
+sub parse_pages_mm_2_1 {
+    my ($mmver, $parse_subs, $parse_appr) = @_;
+
+    my %data = ();
+    my $headline;
+
+    $parse_subs->get_tag ("hr");
+    if ($parse_subs->get_tag ("h2")) {
+	parse_subscriptions ($parse_subs, \%data);
+    }
+
+    $parse_appr->get_tag ("hr");
+    if ($parse_appr->get_tag ("h2")) {
+	parse_approvals ($parse_appr, \%data, $mmver);
+    }
     return (\%data);
 }
 
@@ -495,19 +551,18 @@ sub parse_subscription {
 }
 
 sub parse_approvals {
-    my ($parse, $data) = @_;
+    my ($parse, $data, $mmver) = @_;
     my $token;
-    my $mmver;
 
     do {
 	$parse->get_tag ("table") || die;
-	my $ret = parse_approval ($parse, $data);
-	$mmver = $ret if $ret;
+	parse_approval ($parse, $data, $mmver);
 	$parse->get_tag ("/table");
 	$parse->get_tag ("hr");
 	$token = $parse->get_token;
+	$token = $parse->get_token
+		if ($token->[0] eq "S" && lc ($token->[1]) eq "center");
     } until ($token->[0] eq "S" && lc ($token->[1]) eq "input");
-    return ($mmver);
 }
 
 # NB! lossy!
@@ -532,29 +587,29 @@ sub decode_rfc2047_qp {
 }
 
 sub parse_approval {
-    my ($parse, $data) = @_;
-    my ($from, $reason, $subject, $id, $mmver, $body, $headers);
+    my ($parse, $data, $mmver) = @_;
+    my ($from, $reason, $subject, $id, $body, $headers);
 
-    $parse->get_tag ("tr") || die;
+    $parse->get_tag ("tr") || die;	# From:
     $parse->get_tag ("td") || die;
     $parse->get_tag ("td") || die;
     $from = $parse->get_trimmed_text("/td");
 
-    $parse->get_tag ("tr") || die; # Reason: _or_ Subject:
-    $parse->get_tag ("td") || die;
-    my $field = $parse->get_trimmed_text ("/td");
-    $parse->get_tag ("td") || die; 
-    if ($field =~ /Reason/) {
-	$mmver = 1.2;
+    if ($mmver eq "1.2") {
+	$parse->get_tag ("tr") || die;	# Reason:
+	$parse->get_tag ("td") || die;
+	$parse->get_tag ("td") || die; 
 	$reason = $parse->get_trimmed_text("/td");
-	$parse->get_tag ("tr") || die; # Subject:
+	$parse->get_tag ("tr") || die;	# Subject:
 	$parse->get_tag ("td") || die;
 	$parse->get_tag ("td") || die;
 	$subject = $parse->get_trimmed_text("/td");
     } else {
-	$mmver = 2;
+	$parse->get_tag ("tr") || die;	# Subject:
+	$parse->get_tag ("td") || die;
+	$parse->get_tag ("td") || die; 
 	$subject = $parse->get_trimmed_text("/td");
-	$parse->get_tag ("tr") || die; # Reason:
+	$parse->get_tag ("tr") || die;	# Reason:
 	$parse->get_tag ("td") || die;
 	$parse->get_tag ("td") || die;
 	$reason = $parse->get_trimmed_text("/td");
@@ -570,7 +625,7 @@ sub parse_approval {
     $utf8 ||= 1 if defined $1 && $1 =~ /utf-8/i;
     $subject = utf8_to_latin1 ($subject) if $utf8;
 
-    $parse->get_tag ("tr") || die; # Action:
+    $parse->get_tag ("tr") || die;	# Action:
     my $tag = $parse->get_tag ("input") || die;
     $id = $tag->[1]{"name"};
 
@@ -579,7 +634,7 @@ sub parse_approval {
 		     "reason" => $reason };
 
     $parse->get_tag ("tr") || die; # Reject _or_ Preserve message
-    if ($mmver >= 2) {
+    if ($mmver ge "2.0") {
 	$parse->get_tag ("tr") || die;    # forward
 	$parse->get_tag ("tr") || die;    # Reject
     }
@@ -594,14 +649,14 @@ sub parse_approval {
     $headers = $parse->get_text("/td");
     $data->{$id}->{"spamscore"} = 0;
     $data->{$id}->{"spamscore"} = length ($1)
-	    if $headers =~ /^X-Spam-Level: (\*+)/im;
+	    if $headers =~ /^X-Spam-(?:Level|Score):\s+(\S+)/im;
     $data->{$id}->{"spamscore"} = length ($1)
 	    if $headers =~ /^X-UiO-Spam-score: (s+)/m;
     $data->{$id}->{"date"} = "<no date>";
     $data->{$id}->{"date"} = $1
 	    if $headers =~ /^Date: (.*)$/m;
 
-    if ($mmver == 2) {
+    if ($mmver ge "2.0") {
 	$parse->get_tag ("tr") || die;  # Message Excerpt
 	$parse->get_tag ("td") || die;
 	$parse->get_tag ("textarea") || die;
@@ -619,23 +674,10 @@ sub parse_approval {
     return ($mmver);
 }
 
-sub parse_footer {
-    my ($parse, $data, $mmver) = @_;
+sub set_param_values {
+    my ($mmver, $data) = @_;
 
-    $parse->get_tag ("address") || die;
-    my $text = $parse->get_trimmed_text ("/address") || die;
-
-    if ($text =~ /Mailman\s*v(ersion)? (\d+\.\d+)/) {
-	if ($mmver && $mmver != 0 + $2) {
-	    print STDERR "Unknown version of Mailman.  First I thought ",
-	        "this was version $mmver.\n", "Now version ", 0 + $2,
-	        " looks more likely.  Help!\n";
-	    return (0);
-	}
-	$mmver = 0 + $2;
-    }
-
-    if ($mmver == 2) {
+    if ($mmver ge "2.0") {
 	$data->{"global"}{"actions"} = { "a" => 1,
 					 "r" => 2,
 					 "d" => 3,
@@ -650,7 +692,6 @@ sub parse_footer {
 					 "sr" => 0, # subscribe reject
 				     };
     }
-    return (1);
 }
 
 # .listconf was the configuration file for the previous listadmin
@@ -691,6 +732,7 @@ sub read_config {
     my $count = 0;
     my $lineno = 0;
     my $logfile;
+    my $dumpdir;
     my $confirm = 1;
     my $url;
     my %patterns = map { $_ => undef; }
@@ -712,7 +754,7 @@ sub read_config {
 	chomp;
 	s/\r$//;
 	s/\s+$//;		# trailing whitespace is "always" unintended
-	next if /^\s*#/;
+	next if /^\s*\#/;
 	s/^\s+// if $line;	# remove leading whitespace after continuation
 	if (/\\$/) {
 	    $line .= $`; # $PREFIX
@@ -771,15 +813,10 @@ sub read_config {
 	    }
 	    $default = $act{$default};
 	} elsif ($line =~ /^log\s+/i) {
-	    $logfile = unquote ($');	# ' stupid perl-mode
-	    $logfile =~ s,^\$HOME/,$ENV{'HOME'}/,;
-	    $logfile =~ s,^~/,$ENV{'HOME'}/,;
-	    $logfile =~ s,^~(\w+)/,(getpwnam($1))[7]."/",e;
-	    if ($logfile =~ /^M:/i) {
-		$logfile =~ s,\\,/,g;
-		$logfile =~ s,^M:,$ENV{'HOME'},;
-	    }
-	    $logfile = undef if $logfile eq "none";
+	    $logfile = expand_pathname(unquote($'));	# ')); stupid perl-mode
+	} elsif ($line =~ /^dumpdir\s+/i) {
+	    $dumpdir = expand_pathname(unquote($'));	# ')); stupid perl-mode
+	    mkdir($dumpdir) if (defined $dumpdir);
 	} elsif ($line =~ /^subscription_action\s+/) {
 	    $subact = unquote ($');	# ' stupid perl-mode
 	    unless (exists $sact{$subact}) {
@@ -819,6 +856,7 @@ sub read_config {
 			       "action" => $action,
 			       "default" => $default,
 			       "logfile" => $logfile,
+			       "dumpdir" => $dumpdir,
 			       %patterns,
 			       "order" => ++$count,
 			   };
@@ -842,6 +880,22 @@ sub unquote {
     }
     return ($val);
 }
+
+sub expand_pathname {
+    my ($pathname) = @_;
+
+    $pathname =~ s,^\$HOME/,$ENV{'HOME'}/,;
+    $pathname =~ s,^~/,$ENV{'HOME'}/,;
+    $pathname =~ s,^~(\w+)/,(getpwnam($1))[7]."/",e;
+    if ($pathname =~ /^M:/i) {
+	$pathname =~ s,\\,/,g;
+	$pathname =~ s,^M:,$ENV{'HOME'},;
+    }
+    $pathname = undef if $pathname eq "none";
+    return $pathname;
+}
+
+
 sub prompt_for_config {
     my ($rc) = @_;
 

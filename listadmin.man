@@ -130,7 +130,8 @@ This batch of lines are terminated by a line saying \fBchanges sent to
 server\fP.
 .IP
 The filename \fBnone\fP turns off logging.
-.RE
+\" "dumpdir" is for developer use, so it isn't documented.
+
 .SH INTERACTIVE USE
 
 The user interface to \fBlistadmin\fP is line oriented with single
@@ -220,8 +221,6 @@ in ideas on how to best make this configurable.
 
 The HTML parser is quite fragile and depends on Mailman not to change
 the format of its generated code.
-
-Mailman 2.1 is not supported.
 
 ISO 8859-1 environment is assumed.
 
