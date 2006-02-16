@@ -19,6 +19,7 @@ use Data::Dumper;
 use Term::ReadLine;
 use Getopt::Std;
 use strict;
+use English;
 
 my $rc = $ENV{"HOME"}."/.listadmin.ini";
 
@@ -69,9 +70,12 @@ if (@ARGV) {
     @lists = sort config_order keys %{$config}
 }
 
-my ($from, $subject, $reason, $spamscore);
+my ($num, $count, $list, $from, $subject, $reason, $spamscore);
 
 format STDOUT =
+
+@<<<<<<< ========== @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+sprintf("[%d/%d]", $num, $count), $list." "."=" x (51 - length($list))
 From:    @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
          $from
 Subject: ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -83,7 +87,7 @@ Reason:  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  Spam? @<<
 .
 
 
-for my $list (@lists) {
+for $list (@lists) {
     my $user = $config->{$list}{"user"};
     my $pw = $config->{$list}{"password"};
 
@@ -99,17 +103,19 @@ for my $list (@lists) {
 	    $pw = prompt_password("Enter password" .
 				  ($user ? " for $user: ": ": "));
 	}
-	$info = get_list ($list, $config->{$list}{"adminurl"}, $user, $pw)
-		if $pw;
+	$info = get_list ($list, $config->{$list}, $pw) if $pw;
     } while ($info->{'autherror'} && $pw);
-    next if $info->{'servererror'} || $info->{'autherror'};
+    if ($info->{'servererror'} || $info->{'autherror'}) {
+	print "skipping...\n";
+	next;
+    }
 
     my %change = ();
 
-    process_subscriptions ($list, $info, $config->{$list}, \%change);
-    my $num = undef;
+    process_subscriptions ($info, $config->{$list}, \%change);
+    $num = undef;
  restart_approval:
-    approve_messages ($list, $info, $config->{$list}, \%change, $num);
+    approve_messages ($info, $config->{$list}, \%change);
 
     if ($config->{$list}->{"confirm"}) {
 	if (scalar %change) {
@@ -139,7 +145,7 @@ _END_
 }
 
 sub process_subscriptions {
-    my ($list, $info, $config, $change) = @_;
+    my ($info, $config, $change) = @_;
     my %subscribers = ();
     my $num = 0;
     for my $req (keys %{$info}) {
@@ -201,7 +207,7 @@ end
 }
 
 sub approve_messages {
-    my ($list, $info, $config, $change, $num) = @_;
+    my ($info, $config, $change) = @_;
 
     my $listdef = $config->{"default"};
     my $spamlevel = $config->{"spamlevel"};
@@ -211,7 +217,7 @@ sub approve_messages {
     my $dis_subj = $config->{"discard_if_subject"};
     my $dis_reas = $config->{"discard_if_reason"};
 
-    my $count = keys (%{$info}) - 1;	# subtract 1 for globals
+    $count = keys (%{$info}) - 1;	# subtract 1 for globals
     my $search_pattern = "";
     my $dont_skip_forward = 0;
     if (!defined ($num)) {
@@ -229,7 +235,6 @@ sub approve_messages {
 	$subject = $info->{$id}{"subject"} || "";
 	$reason = $info->{$id}{"reason"};
 	$spamscore = $info->{$id}{"spamscore"};
-	print "\n[$num/$count] ========== $list ==========\n";
 	write;
 
 	while (1) {
@@ -347,8 +352,14 @@ sub approve_messages {
 		my @lines = split (/\n/, $text, 21);
 		pop @lines;
 		print join ("\n", @lines), "\n";
+	    } elsif ($ans eq "t") {
+		print $info->{$id}{"date"}, "\n";
 	    } elsif ($ans eq "url") {
 		print mailman_url($list, $config->{adminurl}), "\n";
+	    } elsif ($ans eq ".") {
+		# write modifies $subject, so reinitialise it
+		$subject = $info->{$id}{"subject"} || "";
+		write;
 	    } elsif ($ans eq "") {
 		# nothing.
 	    } else {
@@ -362,9 +373,11 @@ and pressing Return.
   s  Skip      -- don't decide now, leave it for later
   b  view Body -- display the first 20 lines of the message
   f  view Full -- display the complete message, including headers
+  t  view Time -- display the date the message was sent
   #  jump      -- jump backward or forward to message number #
   /pattern     -- search for next message with matching From or Subject
   ?pattern     -- search for previous message with matching From or Subject
+  .            -- redisplay entry
   q  Quit      -- go on to the next list
 
 end
@@ -414,7 +427,7 @@ sub mailman_url {
 
     my $url = $pattern;
     my $subdom = $domain;
-    $subdom = $` if $subdom =~ /\./;
+    $subdom = $PREMATCH if $subdom =~ /\./;
     $url =~ s/\{list\}/$lp/g;
     $url =~ s/\{domain\}/$domain/g;
     $url =~ s/\{subdomain\}/$subdom/g;
@@ -424,14 +437,13 @@ sub mailman_url {
 
 # Returns a ref to a hash with all the information about pending messages
 sub get_list {
-    my ($list, $url, $user, $pw) = @_;
+    my ($list, $config, $pw) = @_;
 
     my $starttime = time;
     my $mmver;
     my ($page, $page_appr, $resp_appr);
-
-    my $resp = $ua->post(mailman_url($list, $url),
-			 mailman_params($user, $pw));
+    my $resp = $ua->post(mailman_url($list, $config->{"adminurl"}),
+			 mailman_params($config->{"user"}, $pw));
     unless ($resp->is_success) {
 	print STDERR $resp->error_as_HTML;
 	return {'servererror' => 1};
@@ -456,8 +468,9 @@ sub get_list {
     if ($mmver ge "2.1") {
 	# Mailman does not look for "details" in parameters, so it
 	# must be part of the query string.
-	$resp = $ua->post(mailman_url($list, $url, "details=all"),
-			  mailman_params($user, $pw));
+	$resp = $ua->post(mailman_url($list, $config->{"adminurl"},
+				      "details=all"),
+			  mailman_params($config->{"user"}, $pw));
 	unless ($resp->is_success) {
 	    print STDERR $resp->error_as_HTML;
 	    return {'servererror' => 1};
@@ -480,16 +493,16 @@ sub get_list {
     my $data;
     if ($mmver eq "2.1") {
 	my $parse_appr = HTML::TokeParser->new(\$page_appr) || die;
-	$data = parse_pages_mm_2_1($mmver, $parse, $parse_appr);
+	$data = parse_pages_mm_2_1($mmver, $config, $parse, $parse_appr);
     } else {
-	$data = parse_pages_mm_old($mmver, $parse);
+	$data = parse_pages_mm_old($mmver, $config, $parse);
     }
     set_param_values($mmver, $data);
     return $data;
 }
 
 sub parse_pages_mm_old {
-    my ($mmver, $parse) = @_;
+    my ($mmver, $config, $parse) = @_;
 
     my %data = ();
     my $token;
@@ -497,7 +510,7 @@ sub parse_pages_mm_old {
     $parse->get_tag ("h2") || return ();
     my $headline = $parse->get_trimmed_text ("/h2") || die;
     if ($headline =~ /subscription/i) {
-	parse_subscriptions ($parse, \%data);
+	parse_subscriptions ($mmver, $config, $parse, \%data);
 	$token = $parse->get_token;
 	if (lc ($token->[1]) eq "input") {
 	    return (\%data);
@@ -507,44 +520,44 @@ sub parse_pages_mm_old {
 	}
     }
     if ($headline =~ /held for approval/i) {
-	parse_approvals ($parse, \%data, $mmver);
+	parse_approvals ($mmver, $config, $parse, \%data);
     } else {
 	$parse->get_tag ("hr") || die;
 	$token = $parse->get_token;
 	if ($token->[0] eq "S" && lc ($token->[1]) eq "center") {
-	    parse_approvals ($parse, \%data, $mmver);
+	    parse_approvals ($mmver, $config, $parse, \%data);
 	}
     }
     return (\%data);
 }
 
 sub parse_pages_mm_2_1 {
-    my ($mmver, $parse_subs, $parse_appr) = @_;
+    my ($mmver, $config, $parse_subs, $parse_appr) = @_;
 
     my %data = ();
     my $headline;
 
     $parse_subs->get_tag ("hr");
     if ($parse_subs->get_tag ("h2")) {
-	parse_subscriptions ($parse_subs, \%data);
+	parse_subscriptions ($mmver, $config, $parse_subs, \%data);
     }
 
     $parse_appr->get_tag ("hr");
     if ($parse_appr->get_tag ("h2")) {
-	parse_approvals ($parse_appr, \%data, $mmver);
+	parse_approvals ($mmver, $config, $parse_appr, \%data);
     }
     return (\%data);
 }
 
 sub parse_subscriptions {
-    my ($parse, $data) = @_;
+    my ($mmver, $config, $parse, $data) = @_;
     my $token;
 
     $parse->get_tag ("table") || die;
     $parse->get_tag ("tr") || die;
     $parse->get_tag ("tr") || die;
     do {
-	parse_subscription ($parse, $data);
+	parse_subscription ($mmver, $config, $parse, $data);
 	do {
 	    $token = $parse->get_token;
 	} until ($token->[0] eq "S");
@@ -552,7 +565,7 @@ sub parse_subscriptions {
 }
 
 sub parse_subscription {
-    my ($parse, $data) = @_;
+    my ($mmver, $config, $parse, $data) = @_;
 
     $parse->get_tag ("td") || die;
     my $address = $parse->get_trimmed_text ("/td") || die;
@@ -564,12 +577,12 @@ sub parse_subscription {
 }
 
 sub parse_approvals {
-    my ($parse, $data, $mmver) = @_;
+    my ($mmver, $config, $parse, $data) = @_;
     my $token;
 
     do {
 	$parse->get_tag ("table") || die;
-	parse_approval ($parse, $data, $mmver);
+	parse_approval ($mmver, $config, $parse, $data);
 	$parse->get_tag ("/table");
 	$parse->get_tag ("hr");
 	$token = $parse->get_token;
@@ -600,7 +613,7 @@ sub decode_rfc2047_qp {
 }
 
 sub parse_approval {
-    my ($parse, $data, $mmver) = @_;
+    my ($mmver, $config, $parse, $data) = @_;
     my ($from, $reason, $subject, $id, $body, $headers);
 
     $parse->get_tag ("tr") || die;	# From:
@@ -666,17 +679,19 @@ sub parse_approval {
     #   X-spam-score: 4.23 (****)
     #
     # The name of the header is flexible.
-    # 
+    my $header_re = $config->{"spamheader"} || 'X-\S*spam-?(?:level|score)';
+
     # Extract the length from all spam score headers, sort them in
     # descending order, and pick the front (max) element:
     my ($score) = sort {$b <=> $a}
                   map {length} 
-                  $headers =~ /^X-\S*spam-(?:level|score):\s+
+                  $headers =~ /^$header_re:\s+
 			       (?:\d+\.\d+\s+)? \(?(\S+)\)?/xgim;
+
     $data->{$id}->{"spamscore"} = $score || 0;
     $data->{$id}->{"date"} = "<no date>";
     $data->{$id}->{"date"} = $1
-	    if $headers =~ /^Date: (.*)$/m;
+	    if $headers =~ /^Date:\s+(.*)$/m;
     if ($mmver ge "2.0") {
 	$parse->get_tag ("tr") || die;  # Message Excerpt
 	$parse->get_tag ("td") || die;
@@ -684,8 +699,8 @@ sub parse_approval {
 	$body = $parse->get_text("/textarea");
     } else {
 	$headers =~ s/\n\n//s;
-	$body = $';	# ' # stupid perl-mode
-	$headers = $`;
+	$body = $POSTMATCH;
+	$headers = $PREMATCH;
     }
     $headers =~ s/^\s+//;
     $body .= "\n" unless $body =~ /\n$/;
@@ -731,6 +746,7 @@ sub read_config {
     my $dumpdir;
     my $confirm = 1;
     my $url;
+    my $spamheader;
     my %patterns = map { $_ => undef; }
                        qw (not_spam_if_from
 			   not_spam_if_subject
@@ -753,22 +769,22 @@ sub read_config {
 	next if /^\s*\#/;
 	s/^\s+// if $line;	# remove leading whitespace after continuation
 	if (/\\$/) {
-	    $line .= $`; # $PREFIX
+	    $line .= $PREMATCH;
 	    next;
 	}
 	$line .= $_;
 	$line =~ s/^\s+//;
 	next if /^$/;
 	if ($line =~ /^username\s+/i) {
-	    $user = unquote ($');	# ' stupid perl-mode
+	    $user = unquote($POSTMATCH);
 	    if ($user !~ /^[a-z0-9._+-]+\@[a-z0-9.-]+$/) {
 		print STDERR "$file:$lineno: Illegal username: '$user'\n";
 		exit 1;
 	    }
 	} elsif ($line =~ /^password\s+/i) {
-	    $pw = unquote ($');		# ' stupid perl-mode
+	    $pw = unquote($POSTMATCH);
 	} elsif ($line =~ /^spamlevel\s+/i) {
-	    $spam = unquote ($');	# ' stupid perl-mode
+	    $spam = unquote($POSTMATCH);
 	    if ($spam =~ /^(\d+)\s*$/) {
 		$spam = $1;
 	    } else {
@@ -777,7 +793,7 @@ sub read_config {
 		exit 1;
 	    }
 	} elsif ($line =~ /^confirm\s+/i) {
-	    $confirm = unquote ($');	# ' stupid perl-mode
+	    $confirm = unquote($POSTMATCH);
 	    if ($confirm eq "yes") {
 		$confirm = 1;
 	    } elsif ($confirm eq "no") {
@@ -788,7 +804,7 @@ sub read_config {
 		exit 1;
 	    }
 	} elsif ($line =~ /^action\s+/i) {
-	    $action = unquote ($');	# ' stupid perl-mode
+	    $action = unquote($POSTMATCH);
 	    unless (exists $act{$action}) {
 		print STDERR "$file:$lineno: Illegal value: '$action'\n";
 		print STDERR "choose one of ",
@@ -797,10 +813,10 @@ sub read_config {
 	    }
 	    $action = $act{$action};
 	} elsif ($line =~ /^adminurl\s+/i) {
-	    $url = unquote ($');	# ' stupid perl-mode
+	    $url = unquote($POSTMATCH);
 	    $url = undef if $url eq "NONE";
 	} elsif ($line =~ /^default\s+/i) {
-	    $default = unquote ($');	# ' stupid perl-mode
+	    $default = unquote($POSTMATCH);
 	    unless (exists $act{$default}) {
 		print STDERR "$file:$lineno: Illegal value: '$default'\n";
 		print STDERR "choose one of ",
@@ -809,12 +825,12 @@ sub read_config {
 	    }
 	    $default = $act{$default};
 	} elsif ($line =~ /^log\s+/i) {
-	    $logfile = expand_pathname(unquote($'));	# ')); stupid perl-mode
+	    $logfile = expand_pathname(unquote($POSTMATCH));
 	} elsif ($line =~ /^dumpdir\s+/i) {
-	    $dumpdir = expand_pathname(unquote($'));	# ')); stupid perl-mode
+	    $dumpdir = expand_pathname(unquote($POSTMATCH));
 	    mkdir($dumpdir) if (defined $dumpdir);
 	} elsif ($line =~ /^subscription_action\s+/) {
-	    $subact = unquote ($');	# ' stupid perl-mode
+	    $subact = unquote($POSTMATCH);
 	    unless (exists $sact{$subact}) {
 		print STDERR "$file:$lineno: Illegal value: '$subact'\n";
 		print STDERR "choose one of ",
@@ -823,7 +839,7 @@ sub read_config {
 	    }
 	    $subact = $sact{$subact};
 	} elsif ($line =~ /^subscription_default\s+/) {
-	    $subdef = unquote ($');	# ' stupid perl-mode
+	    $subdef = unquote($POSTMATCH);
 	    unless (exists $sact{$subdef}) {
 		print STDERR "$file:$lineno: Illegal value: '$subdef'\n";
 		print STDERR "choose one of ",
@@ -833,7 +849,7 @@ sub read_config {
 	    $subdef = $sact{$subdef};
 	} elsif ($line =~ /^($pattern_keywords)\s+/o) {
 	    my $key = $1;
-	    my $val = $';	# ' stupid perl-mode
+	    my $val = $POSTMATCH;
 	    $val =~ s/\s+$//;
 	    if ($val =~ /^"(.*)"$/) {
 		$val = $1;
@@ -841,6 +857,14 @@ sub read_config {
 		$val =~ s/\\\\/\\/g;
 	    }
 	    $patterns{$key} = ($val eq "NONE") ? undef : $val;
+	} elsif ($line =~ /^spamheader\s+/) {
+	    $spamheader = unquote($POSTMATCH);
+	    unless ($spamheader =~ /^[\w-]+$/) {
+		print STDERR "$file:$lineno: Illegal header name: ".
+			"'$spamheader'\n";
+		exit 1;
+	    }
+	    $spamheader = undef if $spamheader eq "default";
 	} elsif ($line =~ /^([^@ \t]+@[^@])+\s*/) {
 	    $conf->{$line} = { "user" => $user,
 			       "password" => $pw,
@@ -853,6 +877,7 @@ sub read_config {
 			       "default" => $default,
 			       "logfile" => $logfile,
 			       "dumpdir" => $dumpdir,
+			       "spamheader" => $spamheader,
 			       %patterns,
 			       "order" => ++$count,
 			   };
