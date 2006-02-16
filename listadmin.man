@@ -81,6 +81,13 @@ This specifies the threshold for automatic discard of suspected spam
 messages.  12 is unlikely to have false positives.  No user
 confirmation is needed, so it is best to play it safe.  Less than 5 is
 not recommended.
+.IP "spamheader \fIheader-name\fP"
+The name of the header which contains the spam score.  It is assumed
+that the score is encoded as a sequence of characters, like "*****"
+for the value 5.  By default it will look for all headers with names
+containing "spam" and "score" or "level", and pick the highest score
+if there is more than one. Setting the header-name to \fIdefault\fP
+will restore this behaviour.
 .IP "not_spam_if_from \fIpattern\fP"
 If the message's From header matches the pattern, all automatic
 actions will be cancelled and you will be asked what action to take
@@ -152,6 +159,8 @@ Skip the message, leave its status as pending unchanged.
 View Body, display the first 20 lines of the message.
 .IP f
 View Full, display the complete message, including headers.
+.IP t
+View Time, display the Date header from the message.
 .IP \fInumber\fP
 Jump forward or backward to message \fInumber\fP.
 .IP /\fIpattern\fP
@@ -160,6 +169,8 @@ Subject.  If \fIpattern\fP is left out, the previous value will be
 used.
 .IP ?\fIpattern\fP
 As above, but backwards.
+.IP .
+Redisplay information about current message.
 .IP q
 Quit processing this list and go on to the next.
 .RE
