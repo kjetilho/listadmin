@@ -85,7 +85,8 @@ Reason:  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  Spam? @<<
 .
 
 
-for $list (@lists) {
+for (@lists) {
+    $list = $_;
     my $user = $config->{$list}{"user"};
     my $pw = $config->{$list}{"password"} || "";
 
@@ -458,10 +459,14 @@ sub get_list {
     }
 
     my @mailman_mentions = grep {/Mailman/} split (/\n/, $page);
-    my $last_mention = pop(@mailman_mentions);
-    die "Can not find version information in '$last_mention'\n"
-	    unless $last_mention =~ /\bv(ersion)?\s(\d+\.\d+)/;
-    $mmver = $2;
+    for my $mention (reverse @mailman_mentions) {
+	if ($mention =~ /\bv(ersion)?\s(\d+\.\d+)/) {
+	    $mmver = $2;
+	    last;
+	}
+    }
+    die "Can not find version information in, please mail maintainer."
+	    unless $mmver;
 
     if ($mmver ge "2.1") {
 	# Mailman does not look for "details" in parameters, so it
@@ -476,7 +481,7 @@ sub get_list {
 	$page_appr = $resp->content;
     }
 
-    my $dumpdir = $config->{$list}{"dumpdir"};
+    my $dumpdir = $config->{"dumpdir"};
     if (defined $dumpdir) {
 	if (open (DUMP, ">$dumpdir/dump-subs-$list.html")) {
 	    print DUMP $page;
