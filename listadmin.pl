@@ -1,13 +1,11 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.27
+# listadmin version 2.28
 # Written 2003 - 2006 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 #
-
 # Thank you, Sam Watkins and Bernie Hoeneisen, for contributions and
 # feedback.
-
 #
 # Released into public domain.
 
