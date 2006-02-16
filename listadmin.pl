@@ -42,8 +42,6 @@ usage() unless getopts('f:t:');
 $rc = $opt_f if $opt_f;
 usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
 my $time_limit = time + 60 * ($opt_t || 24*60);
-my $hostname = `/bin/uname -n`;
-chomp($hostname);
 # Turn on autoflush on STDOUT
 $| = 1;
 
