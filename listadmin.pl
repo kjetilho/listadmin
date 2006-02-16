@@ -87,7 +87,7 @@ Reason:  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  Spam? @<<
 
 for $list (@lists) {
     my $user = $config->{$list}{"user"};
-    my $pw = $config->{$list}{"password"};
+    my $pw = $config->{$list}{"password"} || "";
 
     if (time > $time_limit) {
 	print "Time's up, skipping the remaining lists\n";
