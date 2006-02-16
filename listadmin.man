@@ -187,7 +187,7 @@ An example configuration file:
 	#
 	# Settings affect all lists being listed after it.
 
-	username jdoe
+	username jdoe@example.com
 	password Geheim
 	default discard
 	# This one works for Sourceforge:
