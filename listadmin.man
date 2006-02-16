@@ -224,12 +224,6 @@ An example configuration file:
 The default configuration file.
 
 .SH BUGS
-The SpamAssassin score is fetched from the header X-Spam-Level, the
-value is the number of asterisks following.  It will also check a
-header specific to the University of Oslo.  If this does not match
-your setup, you will need to change the Perl code.  I'd be interested
-in ideas on how to best make this configurable.
-
 The HTML parser is quite fragile and depends on Mailman not to change
 the format of its generated code.
 
