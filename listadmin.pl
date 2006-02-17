@@ -102,8 +102,10 @@ for (@lists) {
 	}
 	$info = get_list ($list, $config->{$list}, $pw) if $pw;
     } while ($info->{'autherror'} && $pw);
-    if ($info->{'servererror'} || $info->{'autherror'}) {
-	print "skipping...\n";
+    if ($info->{'servererror'}) {
+	next;
+    } elsif ($info->{'autherror'}) {
+	print "no password, skipping...\n" unless $pw;
 	next;
     }
 
