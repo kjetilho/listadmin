@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.28
+# listadmin version 2.29
 # Written 2003 - 2006 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 #
