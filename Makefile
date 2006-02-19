@@ -1,7 +1,7 @@
 SHELL = /bin/sh
 INSTALL = install -c
 
-VERSION = 2.29
+VERSION = 2.30
 
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
@@ -18,7 +18,7 @@ install:
 
 listadmin.txt: listadmin.man
 #	Note the verbatim backspace in the sed command
-	env TERM=dumb nroff -man $< | sed 's/.//g' | uniq > $@.tmp
+	env TERM=dumb nroff -man $< | sed -e '/^XXX/d' -e 's/.//g' | uniq > $@.tmp
 	mv $@.tmp $@
 
 TARFILE = listadmin-$(VERSION).tar.gz

@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.29
+# listadmin version 2.30
 # Written 2003 - 2006 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 #
@@ -94,19 +94,36 @@ for (@lists) {
     }
 
     my $info = {};
-    print "fetching data for $list\n";
+    my $tries = 0;
+    print "\nfetching data for $list ... ";
     do {
-	if ($pw eq "" || $info->{'autherror'}) {
+	if (-t && ($pw eq "" || $info->{'autherror'})) {
+	    print "\n" unless $tries++;
 	    $pw = prompt_password("Enter password" .
 				  ($user ? " for $user: ": ": "));
+	    next if $pw eq "";
 	}
-	$info = get_list ($list, $config->{$list}, $pw) if $pw;
-    } while ($info->{'autherror'} && $pw);
+	$info = get_list($list, $config->{$list}, $pw);
+	if ($info->{'autherror'}) {
+	    print "\n" unless $tries++;
+	    print STDERR "ERROR: Username or password for $list incorrect\n";
+	}
+    } while (-t && $info->{'autherror'} && $tries < 9);
+
     if ($info->{'servererror'}) {
+	print "\n";
+	printf STDERR ("ERROR: fetching %s\n", $info->{'url'});
+	printf STDERR ("ERROR: Server returned '%s' -- skipping list\n",
+		       $info->{'servererror'});
 	next;
     } elsif ($info->{'autherror'}) {
-	print "no password, skipping...\n" unless $pw;
+	print "giving up, proceeding to next list\n";
 	next;
+    } elsif (! %{$info}) {
+	print "nothing in queue\n";
+	next;
+    } else {
+	print "\n";
     }
 
     my %change = ();
@@ -441,20 +458,24 @@ sub get_list {
     my $starttime = time;
     my $mmver;
     my ($page, $page_appr, $resp_appr);
-    my $resp = $ua->post(mailman_url($list, $config->{"adminurl"}),
-			 mailman_params($config->{"user"}, $pw));
+    my $url = mailman_url($list, $config->{"adminurl"});
+    my $resp = $ua->post($url, mailman_params($config->{"user"}, $pw));
     unless ($resp->is_success) {
-	print STDERR $resp->error_as_HTML;
-	return {'servererror' => 1};
+	return {'servererror' => $resp->status_line, 'url' => $url};
     }
     $page = $resp->content;
+    my $dumpdir = $config->{"dumpdir"};
+    if (defined $dumpdir) {
+	if (open (DUMP, ">$dumpdir/dump-$list.html")) {
+	    print DUMP $page;
+	    close (DUMP);
+	}
+    }
 
     my $parse = HTML::TokeParser->new(\$page) || die;
     $parse->get_tag ("title") || die;
     my $title = $parse->get_trimmed_text ("/title") || die;
     if ($title =~ /authentication/i) {
-	print STDERR
-		"Unable to log in. Is your username and password correct?\n";
 	return {'autherror' => 1};
     }
 
@@ -471,23 +492,14 @@ sub get_list {
     if ($mmver ge "2.1") {
 	# Mailman does not look for "details" in parameters, so it
 	# must be part of the query string.
-	$resp = $ua->post(mailman_url($list, $config->{"adminurl"},
-				      "details=all"),
-			  mailman_params($config->{"user"}, $pw));
+	$url = mailman_url($list, $config->{"adminurl"}, "details=all");
+	$resp = $ua->post($url, mailman_params($config->{"user"}, $pw));
 	unless ($resp->is_success) {
-	    print STDERR $resp->error_as_HTML;
-	    return {'servererror' => 1};
+	    return {'servererror' => $resp->status_line, 'url' => $url};
 	}
 	$page_appr = $resp->content;
-    }
-
-    my $dumpdir = $config->{"dumpdir"};
-    if (defined $dumpdir) {
-	if (open (DUMP, ">$dumpdir/dump-subs-$list.html")) {
-	    print DUMP $page;
-	    close (DUMP);
-	}
-	if ($page_appr && open (DUMP, ">$dumpdir/dump-held-$list.html")) {
+	if (defined $dumpdir &&
+	    open (DUMP, ">$dumpdir/dump-details-$list.html")) {
 	    print DUMP $page_appr;
 	    close (DUMP);
 	}
@@ -500,7 +512,7 @@ sub get_list {
     } else {
 	$data = parse_pages_mm_old($mmver, $config, $parse);
     }
-    set_param_values($mmver, $data);
+    set_param_values($mmver, $data) if %{$data};
     return $data;
 }
 
@@ -510,7 +522,7 @@ sub parse_pages_mm_old {
     my %data = ();
     my $token;
     $parse->get_tag ("hr");
-    $parse->get_tag ("h2") || return ();
+    $parse->get_tag ("h2") || return \%data;
     my $headline = $parse->get_trimmed_text ("/h2") || die;
     if ($headline =~ /subscription/i) {
 	parse_subscriptions ($mmver, $config, $parse, \%data);
