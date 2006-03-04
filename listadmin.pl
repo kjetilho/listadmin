@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.30
+# listadmin version 2.31
 # Written 2003 - 2006 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 #
@@ -95,7 +95,7 @@ for (@lists) {
 
     my $info = {};
     my $tries = 0;
-    print "\nfetching data for $list ... ";
+    print "fetching data for $list ... ";
     do {
 	if (-t && ($pw eq "" || $info->{'autherror'})) {
 	    print "\n" unless $tries++;
@@ -155,6 +155,7 @@ _END_
 	    }
 	}
     }
+    print "\n";
 
     commit_changes ($list, $user, $pw, $config->{$list}{"adminurl"},
 		    \%change, $info, $config->{$list}{"logfile"});
@@ -486,8 +487,12 @@ sub get_list {
 	    last;
 	}
     }
-    die "Can not find version information in, please mail maintainer."
-	    unless $mmver;
+    unless ($mmver) {
+	if ($page =~ /no such list/i) {
+	    return {'servererror' => "No such list", 'url' => $url}
+	}
+	die "Can not find version information in, please mail maintainer.";
+    }
 
     if ($mmver ge "2.1") {
 	# Mailman does not look for "details" in parameters, so it
