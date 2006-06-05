@@ -701,14 +701,17 @@ sub parse_approval {
     # The name of the header is flexible.
     my $header_re = $config->{"spamheader"} || 'X-\S*spam-?(?:level|score)';
 
-    # Extract the length from all spam score headers, sort them in
-    # descending order, and pick the front (max) element:
-    my ($score) = sort {$b <=> $a}
-                  map {length} 
-                  $headers =~ /^$header_re:\s+
-			       (?:\d+\.\d+\s+)? \(?(\S+)\)?/xgim;
-
-    $data->{$id}->{"spamscore"} = $score || 0;
+    # Extract all spam score headers, and pick the max value:
+    my $spamscore = 0;
+    while ($headers =~ /^$header_re:\s+
+	                   (-?\d+\.\d+\s+)?
+                           \(?
+                             ((\S)\3*)
+                           (?:\s|\)|$)/xgim) {
+	my $score = defined $1 ? int($1): length($2);
+	$spamscore = $score if $score > $spamscore;
+    }
+    $data->{$id}->{"spamscore"} = $spamscore;
     $data->{$id}->{"date"} = "<no date>";
     $data->{$id}->{"date"} = $1
 	    if $headers =~ /^Date:\s+(.*)$/m;
