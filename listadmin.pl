@@ -44,6 +44,9 @@ usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
 my $time_limit = time + 60 * ($opt_t || 24*60);
 # Turn on autoflush on STDOUT
 $| = 1;
+use I18N::Langinfo qw(langinfo CODESET); # appeared in Perl 5.7.2
+use Encode; # appeared in perl 5.7.1
+binmode STDOUT, ":encoding(" . langinfo(CODESET()) . ")";
 
 my $config = read_config ($rc);
 unless ($config) {
@@ -355,16 +358,13 @@ sub approve_messages {
 		my $head = lc $info->{$id}{"headers"};
 		my $text = $info->{$id}{"body"};
 		if ($head =~ m,content-type:\s+text/,) {
-		    my $charset = "UNKNOWN";
-		    if ($head =~ /charset="?(iso-8859-15?|us-ascii|utf-8)"?/) {
-			$charset = $1;
-		    }
 		    if ($head =~ /content-transfer-encoding:\s+quoted-print/) {
 			$text = MIME::QuotedPrint::decode($text);
 		    } elsif ($head =~ /content-transfer-encoding:\s+base64/) {
 			$text = MIME::Base64::decode_base64($text);
 		    }
-		    $text = utf8_to_latin1 ($text) if $charset eq "utf-8";
+		    $text = Encode::decode($1, $text)
+			    if $head =~ /charset="?(\S+)"?/;
 		}
 		my @lines = split (/\n/, $text, 21);
 		pop @lines;
@@ -611,25 +611,20 @@ sub parse_approvals {
     } until ($token->[0] eq "S" && lc ($token->[1]) eq "input");
 }
 
-# NB! lossy!
-sub utf8_to_latin1 {
-    my ($s) = @_;
-    $s =~ s/([\x80-\xff][\x80-\xbf]*)/&utf8_to_latin1_char($1)/ge;
-    return $s;
-}
-
-sub utf8_to_latin1_char {
-    my($first, @rest) = unpack('C*', $_[0]);
-    $first ^= 0xC2;
-    return chr($first * 0x40 + $rest[0]) if $first < 2 && @rest == 1;
-    # We simply remove the other codes, they obviously won't fit in Latin1.
-    return "";
-}
-
 sub decode_rfc2047_qp {
-    my $text = shift;
+    my ($charset, $encoded_word) = @_;
+    my $text = $encoded_word;
     $text =~ s/_/ /g;
-    return MIME::QuotedPrint::decode ($text);
+    $text = MIME::QuotedPrint::decode($text);
+    $text = Encode::decode($charset, $text);
+    return defined $text ? $text : $encoded_word;
+}
+
+sub decode_rfc2047_base64 {
+    my ($charset, $encoded_word) = @_;
+    my $text = MIME::QuotedPrint::decode_base64($encoded_word);
+    $text = Encode::decode($charset, $text);
+    return defined $text ? $text : $encoded_word;
 }
 
 sub parse_approval {
@@ -660,17 +655,6 @@ sub parse_approval {
 	$parse->get_tag ("td") || die;
 	$reason = $parse->get_trimmed_text("/td");
     }
-    my $utf8 = 0;
-    # this will also decode invalid tokens, where the encoded word is
-    # concatenated with other letters, e.g.  foo=?utf-8?q?=A0=F8?=
-    $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?q\?(.*?)\?=/
-	    decode_rfc2047_qp($2)/ieg;
-    $utf8 ||= 1 if defined $1 && $1 =~ /utf-8/i;
-    $subject =~ s/=\?(us-ascii|utf-8|iso-8859-15?)\?b\?(.*?)\?=/
-	MIME::Base64::decode_base64($2)/ieg;
-    $utf8 ||= 1 if defined $1 && $1 =~ /utf-8/i;
-    $subject = utf8_to_latin1 ($subject) if $utf8;
-
     $parse->get_tag ("tr") || die;	# Action:
     my $tag = $parse->get_tag ("input") || die;
     $id = $tag->[1]{"name"};
@@ -725,9 +709,28 @@ sub parse_approval {
 	$body = $POSTMATCH;
 	$headers = $PREMATCH;
     }
-    $headers =~ s/^\s+//;
-    $body .= "\n" unless $body =~ /\n$/;
+    $headers =~ s/\n\s//; # Header folding
     $data->{$id}->{"headers"} = $headers;
+    if ($mmver ge "2.1") {
+	# Mailman 2.1 decodes Subject itself, but screws up non-ASCII
+	# characters, so we get the raw value from the headers
+	# instead.
+	if ($headers =~ /^Subject:\s*(.*)$/m) {
+	    $subject = $1;
+	}
+    }
+
+    # Bugs: Decodes invalid tokens, where the encoded word is
+    # concatenated with other letters, e.g.  foo=?utf-8?q?=A0=F8?=
+    # Also decodes base64 encoded words which are doubly encoded with
+    # quoted-printable.
+    $subject =~ s/=\?([^? ]+)\?q\?([^? ]*)\?=/
+	    decode_rfc2047_qp($1, $2)/ieg;
+    $subject =~ s/=\?([^? ]+)\?b\?([^? ]*)\?=/
+	    decode_rfc2047_base64($1, $2)/ieg;
+    $data->{$id}->{"subject"} = $subject;
+
+    $body .= "\n" unless $body =~ /\n$/;
     $data->{$id}->{"body"} = $body;
 
     return ($mmver);
