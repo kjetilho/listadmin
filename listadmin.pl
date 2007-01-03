@@ -1,7 +1,7 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.31
-# Written 2003 - 2006 by
+# listadmin version 2.33
+# Written 2003 - 2007 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 #
 # Thank you, Sam Watkins and Bernie Hoeneisen, for contributions and
@@ -16,6 +16,9 @@ use MIME::QuotedPrint;
 use Data::Dumper;
 use Term::ReadLine;
 use Getopt::Std;
+use Text::Reform;
+use I18N::Langinfo qw(langinfo CODESET); # appeared in Perl 5.7.2
+use Encode; # appeared in perl 5.7.1
 use strict;
 use English;
 
@@ -42,11 +45,10 @@ usage() unless getopts('f:t:');
 $rc = $opt_f if $opt_f;
 usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
 my $time_limit = time + 60 * ($opt_t || 24*60);
+my $term_encoding = langinfo(CODESET());
+binmode STDOUT, ":encoding($term_encoding)";
 # Turn on autoflush on STDOUT
 $| = 1;
-use I18N::Langinfo qw(langinfo CODESET); # appeared in Perl 5.7.2
-use Encode; # appeared in perl 5.7.1
-binmode STDOUT, ":encoding(" . langinfo(CODESET()) . ")";
 
 my $config = read_config ($rc);
 unless ($config) {
@@ -70,20 +72,6 @@ if (@ARGV) {
 }
 
 my ($num, $count, $list, $from, $subject, $reason, $spamscore);
-
-format STDOUT =
-
-@<<<<<<< ========== @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-sprintf("[%d/%d]", $num, $count), $list." "."=" x (51 - length($list))
-From:    @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-         $from
-Subject: ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-         $subject
-~~       ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-         $subject
-Reason:  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  Spam? @<<
-         $reason,                                             $spamscore
-.
 
 
 for (@lists) {
@@ -211,7 +199,7 @@ sub process_subscriptions {
 		$change->{$id} = [ "sr", $r ];
 		last;
 	    } else {
-		print STDERR <<end;
+		print STDERR <<"_end_";
 Choose one of the following actions by typing the corresponding letter
 and pressing Return.
 
@@ -220,7 +208,7 @@ and pressing Return.
   s  Skip      -- do not decide now, leave it for later
   q  Quit      -- go on to approving messages
 
-end
+_end_
             }
 	}
     }
@@ -245,8 +233,19 @@ sub approve_messages {
     } else {
 	$dont_skip_forward = 1;
     }
-    my $prompt = 'Approve/Reject/Discard/Skip/view Body/view Full/jump #/Help/Quit';
+    my $tmpl_header = << '_end_';
+
+<<<<<<<<<<<<<<<<<<<< <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+_end_
+    my $tmpl_message = << '_end_';
+From:     <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+<<<<<<<<  [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[
+Reason:   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  Spam? <<<
+_end_
+
+    my $prompt = 'Approve/Reject/Discard/Skip/view Body/Full/jump #/Undo/Help/Quit';
     my @num_to_id = grep { ! /^global$/ } sort keys %{$info};
+    my @undo_list = ();
  msgloop:
     while ($num < $count) {
 	last if time > $time_limit;
@@ -255,8 +254,19 @@ sub approve_messages {
 	$subject = $info->{$id}{"subject"} || "";
 	$reason = $info->{$id}{"reason"};
 	$spamscore = $info->{$id}{"spamscore"};
-	write;
-
+	{
+	    # Get rid of warning from Encode:
+	    # "\x{516b}" does not map to iso-8859-1 at listadmin.pl line 261.
+	    # when run in non UTF-8 environment.
+	    local $SIG{__WARN__} = sub {};
+	    print form({filler => {left => "=", right => "="}},
+		       $tmpl_header,
+		       "[$num/$count] =", "$list =");
+	    print form({interleave => 1},
+		       $tmpl_message,
+		       $from,
+		       "Subject:", $subject, $reason, $spamscore);
+	}
 	while (1) {
 	    my $ans;
 	    my $match = "";
@@ -296,6 +306,7 @@ sub approve_messages {
 	    if ($ans eq "q") {
 		last msgloop;
 	    } elsif ($ans eq "s") {
+		@undo_list = ();
 		delete $change->{$id};
 		$dont_skip_forward = 0;
 		next msgloop;
@@ -304,9 +315,23 @@ sub approve_messages {
 		$dont_skip_forward = 1;
 		next msgloop;
 	    } elsif ($ans eq "a" || $ans eq "d") {
+		@undo_list = () unless $match;
+		push(@undo_list, $num);
 		$change->{$id} = [ $ans ];
 		$dont_skip_forward = 0;
 		last;
+	    } elsif ($ans eq "u") {
+		unless (@undo_list) {
+		    print "Nothing to undo.\n";
+		    next;
+		}
+		for my $m (@undo_list) {
+		    delete $change->{$num_to_id[$m - 1]};
+		}
+		$num = $undo_list[0] - 1;
+		@undo_list = ();
+		$dont_skip_forward = 1;
+		next msgloop;
 	    } elsif ($ans =~ m,([/?])(.*),) {
 		my $i = $num - 1;
 		my $direction = 1;
@@ -349,6 +374,8 @@ sub approve_messages {
 		    goto redo_reject;
 		}
 
+		@undo_list = ();
+		push(@undo_list, $num);
 		$change->{$id} = [ "r", $r ];
 		$dont_skip_forward = 0;
 		last;
@@ -363,11 +390,14 @@ sub approve_messages {
 		    } elsif ($head =~ /content-transfer-encoding:\s+base64/) {
 			$text = MIME::Base64::decode_base64($text);
 		    }
-		    $text = Encode::decode($1, $text)
-			    if $head =~ /charset="?(\S+)"?/;
+		    # perl-mode is confused by ", so we use \x22 ...
+		    if ($head =~ /charset=(\x22?)(\S+?)\1/) {
+			$text = Encode::decode($2, $text);
+		    }
 		}
 		my @lines = split (/\n/, $text, 21);
 		pop @lines;
+		local $SIG{__WARN__} = sub {}; # see comment elsewhere
 		print join ("\n", @lines), "\n";
 	    } elsif ($ans eq "t") {
 		print $info->{$id}{"date"}, "\n";
@@ -392,6 +422,7 @@ and pressing Return.
   f  view Full -- display the complete message, including headers
   t  view Time -- display the date the message was sent
   #  jump      -- jump backward or forward to message number #
+  u  Undo      -- undo last approve or discard
   /pattern     -- search for next message with matching From or Subject
   ?pattern     -- search for previous message with matching From or Subject
   .            -- redisplay entry
@@ -465,6 +496,14 @@ sub get_list {
 	return {'servererror' => $resp->status_line, 'url' => $url};
     }
     $page = $resp->content;
+    if ($page eq "") {
+	if (time - $starttime > 60) {
+	    print "Mailman server timed out?\n";
+	} else {
+	    print "empty page\n";
+	}
+	return {};
+    }
     my $dumpdir = $config->{"dumpdir"};
     if (defined $dumpdir) {
 	if (open (DUMP, ">$dumpdir/dump-$list.html")) {
@@ -616,15 +655,56 @@ sub decode_rfc2047_qp {
     my $text = $encoded_word;
     $text =~ s/_/ /g;
     $text = MIME::QuotedPrint::decode($text);
-    $text = Encode::decode($charset, $text);
+    eval { $text = Encode::decode($charset, $text) };
     return defined $text ? $text : $encoded_word;
 }
 
 sub decode_rfc2047_base64 {
     my ($charset, $encoded_word) = @_;
     my $text = MIME::QuotedPrint::decode_base64($encoded_word);
-    $text = Encode::decode($charset, $text);
+    eval { $text = Encode::decode($charset, $text) };
     return defined $text ? $text : $encoded_word;
+}
+
+sub decode_rfc2047 {
+    my ($hdr, $config) = @_;
+
+    # Bugs: Decodes invalid tokens, where the encoded word is
+    # concatenated with other letters, e.g.  foo=?utf-8?q?=A0=F8?=
+    # Also decodes base64 encoded words which are doubly encoded with
+    # quoted-printable.
+
+    $hdr =~ s/=\?([^? ]+)\?q\?([^? ]*)\?=/
+	    decode_rfc2047_qp($1, $2)/ieg;
+    $hdr =~ s/=\?([^? ]+)\?b\?([^? ]*)\?=/
+	    decode_rfc2047_base64($1, $2)/ieg;
+
+    # This may look a bit silly.  We first encode to the character set
+    # of our terminal.  If it is a limited character set such as
+    # Latin1, Chinese glyphs are converted into e.g. "&#x41a;", while
+    # "n with tilde" will be a single glyph.  We then convert this
+    # back to a Unicode string so that the length is right (number of
+    # glyphs, not octets) for Text::Reform.  Finally, when the Unicode
+    # string is printed to the screen, the binmode directive for
+    # STDOUT tells Perl to once more translate it into the terminal's
+    # character set.
+
+    $hdr = Encode::decode($term_encoding,
+			  Encode::encode($term_encoding, $hdr,
+					 Encode::FB_HTMLCREF));
+
+    # The built-in formats for unprintable glyphs are ugly, and to be
+    # allowed to specify a code ref which returns our preferred format
+    # directly, we need to require Encode version 2.10, which feels a
+    # bit unnecessary.
+
+    if (defined $config && $config->{"unprintable"} eq "unicode") {
+	$hdr =~ s/&\#(\d+);/sprintf("<U+%04x>", $1)/ge;
+    } else {
+	$hdr =~ s/&\#\d+;/<?>/g;
+    }
+
+    return $hdr;
 }
 
 sub parse_approval {
@@ -659,7 +739,7 @@ sub parse_approval {
     my $tag = $parse->get_tag ("input") || die;
     $id = $tag->[1]{"name"};
 
-    $data->{$id} = { "from" => $from,
+    $data->{$id} = { "from" => decode_rfc2047($from, $config),
 		     "subject" => $subject,
 		     "reason" => $reason };
 
@@ -711,24 +791,15 @@ sub parse_approval {
     }
     $headers =~ s/\n\s//; # Header folding
     $data->{$id}->{"headers"} = $headers;
-    if ($mmver ge "2.1") {
-	# Mailman 2.1 decodes Subject itself, but screws up non-ASCII
-	# characters, so we get the raw value from the headers
-	# instead.
-	if ($headers =~ /^Subject:\s*(.*)$/m) {
-	    $subject = $1;
-	}
+
+    # Mailman decodes Subject itself, but at least version 2.0 and 2.1
+    # screw up non-ASCII characters, so we get the raw value from the
+    # headers instead.
+    if ($headers =~ /^Subject:\s*(.*?)\n(\S|$)/i) {
+	$subject = $1;
     }
 
-    # Bugs: Decodes invalid tokens, where the encoded word is
-    # concatenated with other letters, e.g.  foo=?utf-8?q?=A0=F8?=
-    # Also decodes base64 encoded words which are doubly encoded with
-    # quoted-printable.
-    $subject =~ s/=\?([^? ]+)\?q\?([^? ]*)\?=/
-	    decode_rfc2047_qp($1, $2)/ieg;
-    $subject =~ s/=\?([^? ]+)\?b\?([^? ]*)\?=/
-	    decode_rfc2047_base64($1, $2)/ieg;
-    $data->{$id}->{"subject"} = $subject;
+    $data->{$id}->{"subject"} = decode_rfc2047($subject, $config);
 
     $body .= "\n" unless $body =~ /\n$/;
     $data->{$id}->{"body"} = $body;
@@ -773,6 +844,7 @@ sub read_config {
     my $confirm = 1;
     my $url;
     my $spamheader;
+    my $unprintable = "questionmark";
     my %patterns = map { $_ => undef; }
                        qw (not_spam_if_from
 			   not_spam_if_subject
@@ -904,9 +976,17 @@ sub read_config {
 			       "logfile" => $logfile,
 			       "dumpdir" => $dumpdir,
 			       "spamheader" => $spamheader,
+			       "unprintable" => $unprintable,
 			       %patterns,
 			       "order" => ++$count,
 			   };
+	} elsif ($line =~ /^unprintable\s+/) {
+	    $unprintable = unquote($POSTMATCH);
+	    unless ($unprintable =~ /^(questionmark|unicode)$/) {
+		print STDERR "$file:$lineno: Illegal format for ".
+			"unprintable characters: '$unprintable'\n";
+		exit 1;
+	    }
 	} else {
 	    print STDERR "$file:$lineno: Syntax error: '$line'\n";
 	    exit 1;
@@ -1093,7 +1173,9 @@ sub submit_http {
     if ($logfile) {
 	if (open (LOG, ">>$logfile")) {
 	    LOG->autoflush(1);
+	    binmode LOG, ":encoding(" . langinfo(CODESET()) . ")";
 	    $opened = 1;
+	    local $SIG{__WARN__} = sub {}; # see comment elsewhere
 	    print LOG $log;
 	} else {
 	    print STDERR "WARNING: Failed to append to $logfile: $!\n";

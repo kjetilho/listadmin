@@ -41,7 +41,8 @@ A directive affects all the mailing lists addresses which follow after
 it in the configuration file.  The directives are:
 .RS
 .IP "username \fIusername\fP"
-Specifies the username to use for authentication.
+Specifies the username to use for authentication.  (Not all Mailman
+servers require a username.)
 .IP "password \fIpassword\fP"
 Specifies the password to use for authentication.
 .IP "adminurl \fIurl\fP"
@@ -125,6 +126,11 @@ very useful.  It is better to get automatic accept and reject
 behaviour by changing the Mailman configuration.
 .IP "confirm \fIyes|no\fP"
 Before submitting changes, ask for confirmation.  Default is "yes".
+.IP "unprintable \fIquestionmark|unicode\fP"
+If the subject or sender address contains characters the terminal
+can't display, they will be replaced by either "<?>" (in
+\fIquestionmark\fP mode, the default) or something like "<U+86a8>" (in
+\fIunicode\fP mode).
 .IP "log \fIfilename\fP"
 Changes submitted to the web interface are logged.  All the changes
 for one list are sent in batches at the end of processing.  The format
@@ -163,6 +169,9 @@ View Full, display the complete message, including headers.
 View Time, display the Date header from the message.
 .IP \fInumber\fP
 Jump forward or backward to message \fInumber\fP.
+.IP u
+Go back to the previous message and undo the last approve, discard or
+reject action.
 .IP /\fIpattern\fP
 Search (case-insensitively) for the next message with matching From or
 Subject.  If \fIpattern\fP is left out, the previous value will be
@@ -179,7 +188,21 @@ Changes will not take effect until the end of the list has been
 reached.  At that time, the user will be prompted whether the changes
 should be submitted to Mailman (see also "confirm" directive above).
 
-.SH EXAMPLE
+.SH EXAMPLES
+To process only the lists of a single domain, specify the domain as
+the pattern:
+.nf
+.ta +3m
+	listadmin example.com
+.fi
+
+To disable the printing of characters outside US-ASCII, set the locale
+appropriately:
+.nf
+.ta +3m
+	env LC_CTYPE=C listadmin
+.fi
+
 An example configuration file:
 .nf
 .ta +3m +4n
@@ -226,8 +249,6 @@ The default configuration file.
 .SH BUGS
 The HTML parser is quite fragile and depends on Mailman not to change
 the format of its generated code.
-
-ISO 8859-1 environment is assumed.
 
 .SH AUTHOR
 Kjetil T. Homme <kjetilho+listadmin@ifi.uio.no>
