@@ -26,25 +26,33 @@ my $rc = $ENV{"HOME"}."/.listadmin.ini";
 
 sub usage {
     print STDERR <<_end_;
-Usage: $0 [-f CONFIGFILE] [-t MINUTES] [LISTNAME]
+Usage: $0 [-f CONFIGFILE] [-t MINUTES] [{-a|-r} FILE] [-l] [LISTNAME]
   -f CONFIGFILE    Read configuration from CONFIGFILE.
                    (default: $rc)
   -t MINUTES       Stop processing after MINUTES minutes.  Decimals are
                    allowed.
+  -a FILE          Add e-mail addresses in FILE to list
+  -r FILE          Remove e-mail addresses in FILE to list
+  -l               List subscribers
   LISTNAME         Only process lists with name matching LISTNAME.
+
+If -a, -r or -l is given, LISTNAME must match exactly one list.
 _end_
     exit (64);
 }
 
-my $term;
-my $ua = new LWP::UserAgent ("timeout" => 600);
+our ($opt_f, $opt_t, $opt_a, $opt_r, $opt_l);
 
-our ($opt_f, $opt_t);
+usage() unless getopts('f:t:a:r:l');
 
-usage() unless getopts('f:t:');
 $rc = $opt_f if $opt_f;
 usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
+usage() if defined $opt_a && defined $opt_r;
+usage() if defined $opt_l && (defined $opt_a || defined $opt_r);
+
+my $ua = new LWP::UserAgent ("timeout" => 900);
 my $time_limit = time + 60 * ($opt_t || 24*60);
+my $term;
 my $term_encoding = langinfo(CODESET());
 binmode STDOUT, ":encoding($term_encoding)";
 # Turn on autoflush on STDOUT
@@ -71,7 +79,38 @@ if (@ARGV) {
     @lists = sort config_order keys %{$config}
 }
 
-my ($num, $count, $list, $from, $subject, $reason, $spamscore);
+if (@lists > 1 && (defined $opt_r || defined $opt_a || defined $opt_l)) {
+    print STDERR "Too many matching lists\n";
+    usage();
+}
+
+my $list = $lists[0];
+my $subscribe_result;
+if (defined $opt_a) {
+    my @addresses = read_address_file($opt_a, 1);
+    $subscribe_result = add_subscribers($list, $config->{$list}, 0, @addresses);
+} elsif (defined $opt_r) {
+    my @addresses = read_address_file($opt_r, 1);
+    $subscribe_result = remove_subscribers($list, $config->{$list}, @addresses);
+}
+if (defined $subscribe_result) {
+    for my $addr (keys %{$subscribe_result}) {
+	print STDERR "$addr: $subscribe_result->{$addr}\n";
+    }
+    if (%{$subscribe_result}) {
+	exit(1);
+    } else {
+	print "Ok\n";
+	exit(0);
+    }
+}
+if (defined $opt_l) {
+    my @subscribers = list_subscribers($list, $config->{$list});
+    print join("\n", @subscribers, "");
+    exit(@subscribers == 0);
+}
+
+my ($num, $count, $from, $subject, $reason, $spamscore);
 
 
 for (@lists) {
@@ -116,6 +155,7 @@ for (@lists) {
     } else {
 	print "\n";
     }
+    $config->{$list}{"password"} = $pw;
 
     my %change = ();
 
@@ -258,6 +298,7 @@ _end_
 	    # Get rid of warning from Encode:
 	    # "\x{516b}" does not map to iso-8859-1 at listadmin.pl line 261.
 	    # when run in non UTF-8 environment.
+	redraw:
 	    local $SIG{__WARN__} = sub {};
 	    print form({filler => {left => "=", right => "="}},
 		       $tmpl_header,
@@ -300,13 +341,15 @@ _end_
 	    $pr .= " ? ";
 	    $ans ||= prompt ($pr);
 	    $ans = "q" unless defined $ans;
-	    $ans =~ s/\s+//g;
+	    $ans =~ s/^\s+//;
+	    $ans =~ s/\s+$//;
 	    $ans = $def if $ans eq "" && defined $def;
 	    $ans = lc $ans;
 	    if ($ans eq "q") {
 		last msgloop;
 	    } elsif ($ans eq "s") {
-		@undo_list = ();
+		# Undo will be a no-op, except it will go back to this message.
+		push(@undo_list, [$num]);
 		delete $change->{$id};
 		$dont_skip_forward = 0;
 		next msgloop;
@@ -315,8 +358,9 @@ _end_
 		$dont_skip_forward = 1;
 		next msgloop;
 	    } elsif ($ans eq "a" || $ans eq "d") {
-		@undo_list = () unless $match;
-		push(@undo_list, $num);
+		# If it is automatically discarded, add it to existing list
+		push(@undo_list, []) unless $match;
+		push(@{$undo_list[$#undo_list]}, $num);
 		$change->{$id} = [ $ans ];
 		$dont_skip_forward = 0;
 		last;
@@ -325,13 +369,55 @@ _end_
 		    print "Nothing to undo.\n";
 		    next;
 		}
-		for my $m (@undo_list) {
+		my @trans_list = @{pop(@undo_list)};
+		for my $m (@trans_list) {
 		    delete $change->{$num_to_id[$m - 1]};
 		}
-		$num = $undo_list[0] - 1;
-		@undo_list = ();
+		$num = $trans_list[0] - 1;
 		$dont_skip_forward = 1;
 		next msgloop;
+	    } elsif ($ans =~ /^list(\s+|$)/) {
+		my @list = list_subscribers($list, $config);
+		my $member_count = scalar @list;
+		if ($POSTMATCH ne "") {
+		    @list = grep { /$POSTMATCH/ } @list;
+		    printf("Found %d matching addresses:\n  ", scalar @list);
+		} else {
+		    print "Mailing list members:\n  ";
+		}
+		print join("\n  ", @list);
+		print "\n$member_count members in total\n";
+	    } elsif ($ans =~ /^add(\s+|$)/) {
+		my $addr = $POSTMATCH || $from;
+		my $res = add_subscribers($list, $config, 1, $addr);
+		for my $addr (keys %{$subscribe_result}) {
+		    print "$addr: $res->{$addr}\n";
+		}
+		print "done\n";
+	    } elsif ($ans =~ /^rem(\s+|$)/) {
+		my $patt = $POSTMATCH;
+		if ($patt eq "") {
+		    print "You need to specify a pattern\n";
+		    next;
+		}
+		my @list = grep { /$patt/ } list_subscribers($list, $config);
+		if (@list == 0) {
+		    print "No matching addresses\n";
+		    next;
+		}
+		print "Matching addresses:\n  ", join ("\n  ", @list), "\n";
+		my $c = prompt ("Remove subscribers? (there is no undo!) [no] ");
+		if ($c =~ /^\s*(ja?|y|yes)\s*$/i) {
+		    print "removing...\n";
+		    my $res = remove_subscribers($list, $config, @list);
+		    for my $addr (keys %{$subscribe_result}) {
+			print "$addr: $res->{$addr}\n";
+		    }
+		    print "done\n";
+		} else {
+		    print "aborted\n";
+		    next;
+		}
 	    } elsif ($ans =~ m,([/?])(.*),) {
 		my $i = $num - 1;
 		my $direction = 1;
@@ -374,39 +460,56 @@ _end_
 		    goto redo_reject;
 		}
 
-		@undo_list = ();
-		push(@undo_list, $num);
+		push(@undo_list, [ $num ]);
 		$change->{$id} = [ "r", $r ];
 		$dont_skip_forward = 0;
 		last;
 	    } elsif ($ans eq "f") {
-		print $info->{$id}{"headers"}, "\n\n", $info->{$id}{"body"};
+		# Since the raw bytes aren't really Unicode, we set
+		# the replacement sequence to be "<?>" unconditionally.
+		print degrade_charset($info->{$id}{"headers"} . "\n\n" . $info->{$id}{"body"},
+				      "questionmark");
 	    } elsif ($ans eq "b") {
-		my $head = lc $info->{$id}{"headers"};
+		my $head = $info->{$id}{"headers"};
 		my $text = $info->{$id}{"body"};
-		if ($head =~ m,content-type:\s+text/,) {
-		    if ($head =~ /content-transfer-encoding:\s+quoted-print/) {
+		my $mime_headers = "";
+		if ($head =~ m,content-type:\s*text/,i) {
+		    $mime_headers = $head;
+		} elsif ($head =~ m,content-type:\s*multipart/,i) {
+		    # This is quick and dirty, we look at the first
+		    # MIME headers in the body instead.  We can't do
+		    # proper MIME parsing since the message is
+		    # truncated by Mailman.
+		    $mime_headers = $text;
+		}
+		if ($mime_headers =~ /content-transfer-encoding:\s+(\S+)/i) {
+		    my $cte = $1;
+		    if ($cte =~ /quoted-printable/i) {
 			$text = MIME::QuotedPrint::decode($text);
-		    } elsif ($head =~ /content-transfer-encoding:\s+base64/) {
-			$text = MIME::Base64::decode_base64($text);
-		    }
-		    # perl-mode is confused by ", so we use \x22 ...
-		    if ($head =~ /charset=(\x22?)(\S+?)\1/) {
-			$text = Encode::decode($2, $text);
+		    } elsif ($cte =~ /base64/i) {
+			# Don't bother with truncated lines.
+			$text =~ s!([A-Za-z0-9/+=]{72,76})!MIME::Base64::decode_base64($1)!ge;
 		    }
 		}
+		if ($mime_headers =~ /charset=(\S+)/i) {
+		    my $charset = $1;
+		    $charset =~ s/;$//;
+		    $charset =~ s/^"(.*)"$/$1/;
+		    $charset = guess_charset($charset, $text);
+		    eval { $text = Encode::decode($charset, $text) };
+		}
+
+		$text = degrade_charset($text, $config->{unprintable});
 		my @lines = split (/\n/, $text, 21);
 		pop @lines;
-		local $SIG{__WARN__} = sub {}; # see comment elsewhere
+		# local $SIG{__WARN__} = sub {}; # see comment elsewhere
 		print join ("\n", @lines), "\n";
 	    } elsif ($ans eq "t") {
 		print $info->{$id}{"date"}, "\n";
 	    } elsif ($ans eq "url") {
 		print mailman_url($list, $config->{adminurl}), "\n";
 	    } elsif ($ans eq ".") {
-		# write modifies $subject, so reinitialise it
-		$subject = $info->{$id}{"subject"} || "";
-		write;
+		goto redraw;
 	    } elsif ($ans eq "") {
 		# nothing.
 	    } else {
@@ -414,19 +517,22 @@ _end_
 Choose one of the following actions by typing the corresponding letter
 and pressing Return.
 
-  a  Approve   -- the message will be sent to all members of the list
-  r  Reject    -- notify sender that the message was rejected
-  d  Discard   -- throw message away, don't notify sender
-  s  Skip      -- don't decide now, leave it for later
-  b  view Body -- display the first 20 lines of the message
-  f  view Full -- display the complete message, including headers
-  t  view Time -- display the date the message was sent
-  #  jump      -- jump backward or forward to message number #
-  u  Undo      -- undo last approve or discard
-  /pattern     -- search for next message with matching From or Subject
-  ?pattern     -- search for previous message with matching From or Subject
-  .            -- redisplay entry
-  q  Quit      -- go on to the next list
+  a  Approve     -- the message will be sent to all members of the list
+  r  Reject      -- notify sender that the message was rejected
+  d  Discard     -- throw message away, don't notify sender
+  s  Skip        -- don't decide now, leave it for later
+  b  view Body   -- display the first 20 lines of the message
+  f  view Full   -- display the complete message, including headers
+  t  view Time   -- display the date the message was sent
+  #  jump        -- jump backward or forward to message number #
+  u  Undo        -- undo last approve or discard
+  /pattern       -- search for next message with matching From or Subject
+  ?pattern       -- search for previous message with matching From or Subject
+  .              -- redisplay entry
+  add [address]  -- add nomail subscription for address (defaults to From)
+  list [pattern] -- list mailing list members matching optional pattern
+  rem pattern    -- remove list member addresses matching pattern
+  q  Quit        -- go on to the next list
 
 end
 		print <<"end" if $listdef;
@@ -466,7 +572,7 @@ sub uio_adminurl {
 }
 
 sub mailman_url {
-    my ($list, $pattern, $params) = @_;
+    my ($list, $pattern, $params, $action) = @_;
 
     my ($lp, $domain) = split ('@', $list);
 
@@ -479,6 +585,10 @@ sub mailman_url {
     $url =~ s/\{list\}/$lp/g;
     $url =~ s/\{domain\}/$domain/g;
     $url =~ s/\{subdomain\}/$subdom/g;
+    if ($action) {
+	$url =~ s,/admindb/,/admin/,;
+	$url .= "/$action";
+    }
     $url .= "?$params" if $params;
     return $url;
 }
@@ -650,11 +760,22 @@ sub parse_approvals {
     } until ($token->[0] eq "S" && lc ($token->[1]) eq "input");
 }
 
+sub guess_charset {
+    my ($charset, $text) = @_;
+
+    # Mislabeling Shift JIS as ISO 2022 is a very common mistake.
+    if ($charset =~ /^iso-2022-jp/i && $text =~ /[\x80-\x9f]/) {
+	return "Shift_JIS";
+    }
+    return $charset;
+}
+
 sub decode_rfc2047_qp {
     my ($charset, $encoded_word) = @_;
     my $text = $encoded_word;
     $text =~ s/_/ /g;
     $text = MIME::QuotedPrint::decode($text);
+    $charset = guess_charset($charset, $text);
     eval { $text = Encode::decode($charset, $text) };
     return defined $text ? $text : $encoded_word;
 }
@@ -662,6 +783,7 @@ sub decode_rfc2047_qp {
 sub decode_rfc2047_base64 {
     my ($charset, $encoded_word) = @_;
     my $text = MIME::QuotedPrint::decode_base64($encoded_word);
+    $charset = guess_charset($charset, $text);
     eval { $text = Encode::decode($charset, $text) };
     return defined $text ? $text : $encoded_word;
 }
@@ -679,6 +801,22 @@ sub decode_rfc2047 {
     $hdr =~ s/=\?([^? ]+)\?b\?([^? ]*)\?=/
 	    decode_rfc2047_base64($1, $2)/ieg;
 
+    return degrade_charset($hdr, $config->{unprintable});
+}
+
+sub degrade_charset {
+    my ($text, $unprintable) = @_;
+
+    # Handle unencoded Shift JIS (Japanese) text.  The input text is
+    # either raw data from the message, or Unicode, in which case it
+    # will not contain these code points.  This discrimates slightly
+    # against users of Windows-1252, which has curved quotes at 0x82
+    # (0x81 is unassigned).
+
+    if ($text =~ /[\x81\x82]/) {
+	eval { $text = Encode::decode("Shift_JIS", $text) };
+    }
+
     # This may look a bit silly.  We first encode to the character set
     # of our terminal.  If it is a limited character set such as
     # Latin1, Chinese glyphs are converted into e.g. "&#x41a;", while
@@ -689,23 +827,31 @@ sub decode_rfc2047 {
     # STDOUT tells Perl to once more translate it into the terminal's
     # character set.
 
-    $hdr = Encode::decode($term_encoding,
-			  Encode::encode($term_encoding, $hdr,
-					 Encode::FB_HTMLCREF));
+    $text = Encode::decode($term_encoding,
+			   Encode::encode($term_encoding, $text,
+					  Encode::FB_HTMLCREF));
 
     # The built-in formats for unprintable glyphs are ugly, and to be
     # allowed to specify a code ref which returns our preferred format
     # directly, we need to require Encode version 2.10, which feels a
     # bit unnecessary.
 
-    if (defined $config && $config->{"unprintable"} eq "unicode") {
-	$hdr =~ s/&\#(\d+);/sprintf("<U+%04x>", $1)/ge;
+    if (defined $config && $unprintable eq "unicode") {
+	$text =~ s/&\#(\d+);/sprintf("<U+%04x>", $1)/ge;
     } else {
-	$hdr =~ s/&\#\d+;/<?>/g;
+	$text =~ s/&\#\d+;/<?>/g;
     }
 
-    return $hdr;
+    # Get rid of ESC sequences which may cause havoc with the
+    # terminal, we only keep TAB and LF.  Also removes control
+    # characters with high bit set, 127-159, which are unallocated in
+    # Unicode.
+
+    $text =~ s/([\x00-\x08\x0b-\x1f\x7f-\x9f])/sprintf("<%02x>", ord($1))/eg;
+
+    return $text;
 }
+
 
 sub parse_approval {
     my ($mmver, $config, $parse, $data) = @_;
@@ -789,14 +935,18 @@ sub parse_approval {
 	$body = $POSTMATCH;
 	$headers = $PREMATCH;
     }
-    $headers =~ s/\n\s//; # Header folding
+    $headers =~ s/\n(\s)/$1/g; # Header folding
+    $headers =~ s/^\s+//;
     $data->{$id}->{"headers"} = $headers;
 
     # Mailman decodes Subject itself, but at least version 2.0 and 2.1
     # screw up non-ASCII characters, so we get the raw value from the
     # headers instead.
-    if ($headers =~ /^Subject:\s*(.*?)\n(\S|$)/i) {
+    if ($headers =~ /^Subject:\s*(.*)\s*$/mi) {
 	$subject = $1;
+    }
+    if ($subject =~ /[\x80-\xff]/) {
+	$subject .= " [unencoded]";
     }
 
     $data->{$id}->{"subject"} = decode_rfc2047($subject, $config);
@@ -1125,18 +1275,13 @@ sub commit_changes {
 	}
 	++$changes;
 
-	# HTTP does not specify a maximum length for the URI in a GET
-	# request, but it recommends that a server does not rely on
-	# clients being able to send URIs larger than 255 octets.  the
-	# reject reason can be very long, so theoretically, we can
-	# overshoot that limit even if we change the 500 below into
-	# 250.  Mailman has been observed to reject URI's ~3400 octets
-	# long, but accept 8021.  the limit is probably based on the
-	# time taken to process, rather than the length of the URI.
-	# in times with high load on the Mailman server, it's best to
-	# keep the amount of work per request down.
+	# HTTP does not specify a maximum size for a POST request, so
+	# we could do this as one request.  However, Apache is usually
+	# set up to close the connection after the CGI script has run
+	# for 5 minutes, so we reduce the size of each request to be
+	# nice to slow servers.
 
-	if ($changes > 50) {
+	if ($changes >= 100) {
 	    $update_count += $changes;
 	    printf("sending %d updates to server, %d left    \r",
 		   $changes, $update_total - $update_count);
@@ -1164,6 +1309,181 @@ sub log_timestamp {
     my ($sec, $min, $hour, $mday, $mon, $year) = (localtime (time))[0..5];
     return (sprintf ("submitting %s %04d-%02d-%02dT%02d:%02d:%02d\n",
 		     $list, $year+1900, $mon+1, $mday, $hour, $min, $sec));
+}
+
+sub add_subscribers {
+    my ($list, $config, $nomail, @addresses) = @_;
+
+    die unless @addresses;
+
+    my %params = (username => $config->{user},
+		  adminpw => $config->{password},
+		  subscribe_or_invite => 0,                # Mailman 2.x
+		  send_notifications_to_list_owner => 0,   # Mailman 2.x
+		  send_welcome_message_to_this_batch => 0, # Mailman 2.x
+		  send_welcome_msg_to_this_batch => 0,     # Mailman 1.2
+		  subscribees => join("\n", @addresses));
+    my $url = mailman_url($list, $config->{adminurl}, "", "members");
+    my $resp = $ua->post($url, \%params);
+    return $resp->status_line unless $resp->is_success;
+
+    my $result = parse_subscribe_response($resp->content);
+
+    if ($nomail) {
+	%params = (username => $config->{user},
+		   adminpw => $config->{password},
+		   $params{user} => \@addresses,
+		   setmemberopts_btn => "submit");	# Mailman 2.x
+	for my $a (@addresses) {
+	    $params{$a . "_nomail"} = "on";
+	    $params{$a . "_subscribed"} = "on";		# Mailman 1.2
+	}
+	print Dumper($url, \%params);
+	$resp = $ua->post($url, \%params);
+	return $resp->status_line unless $resp->is_success;
+    }
+
+    return $result;
+}
+
+sub remove_subscribers {
+    my ($list, $config, @addresses) = @_;
+
+    my $url = mailman_url($list, $config->{adminurl}, "", "members");
+
+    # In Mailman 1.2, unsubscription happens when an address is
+    # mentioned in "user" without a corresponding
+    # "$address_subscribed" parameter
+    my %params = (username => $config->{user},
+		  adminpw => $config->{password},
+		  setmemberopts_btn => "submit",	# Mailman 2.x
+		  user => \@addresses);
+    for my $a (@addresses) {
+	$params{$a . "_unsub"} = "on";			# Mailman 2.x
+    }
+    my $resp = $ua->post($url, \%params);
+    return $resp->status_line unless $resp->is_success;
+
+    return parse_subscribe_response($resp->content);
+}
+
+
+sub parse_subscribe_response {
+    my ($page) = @_;
+
+    # Normalise, to make parsing easier (Hack!)
+    $page =~ s/<h3\>/\<h5\>/ ;
+    $page =~ s/<\/h3\>/\<\/h5\>/;
+
+    # In Mailman 1.2 and 2.0, you will not get an explicit success
+    # report when removing subscribers, so we only return the
+    # failures since the successes can be inferred anyway.
+
+    my %failure = ();
+
+    my $parse = HTML::TokeParser->new(\$page) || die;
+
+    while ($parse->get_tag ("h5")) {
+	my $h5 = $parse->get_text ("/h5");
+
+	$parse->get_tag ("ul") || die;
+	my $ul = $parse->get_text ("/ul") || die;
+
+	if ($h5 =~ /Successfully (un)?subscribed/i) {
+	    # hooray!
+	} elsif ($h5 =~ /Error (un)?subscribing/i) {
+	    for (split(/\n/, $ul)) {
+		chomp;
+		if (/^\s*(.*?)\s*--\s*(.*)/) {
+		    $failure{$1} = $2;
+		}
+	    }
+	} else {
+	    $ul =~ s/\n/\n\t/g;
+	    print STDERR "You have an unusual Mailman output.  Please mail ".
+		    "this message to\nkjetilho+listadmin\@ifi.uio.no:\n".
+		    "\t[$h5]\n\t[$ul]\nThanks!\n";
+	}
+	$parse->get_tag ("p") || die;
+    }
+
+    return \%failure;
+}
+
+sub list_subscribers {
+    my ($list, $config) = @_;
+
+    my $url = mailman_url($list, $config->{adminurl}, "", "members");
+    my %params = (username => $config->{user},
+		  adminpw => $config->{password},
+		  chunk => 0);
+    my $resp = $ua->post($url, \%params);
+    unless ($resp->is_success) {
+	print "$url: ", $resp->status_line, "\n";
+	return ();
+    }
+
+    my @addresses = ();
+    my ($parse, $page, $tag);
+    my $chunk = 0;
+
+ member_chunk:
+    while ($resp->is_success) {
+	$page = $resp->content;
+	$parse = HTML::TokeParser->new(\$page);
+	my $count = 0;
+	while ($tag = $parse->get_tag("input")) {
+	    my $attr = $tag->[1];
+	    if ($attr->{type} =~ /^hidden$/i &&
+		$attr->{name} =~ /^user$/i) {
+		++$count;
+		my $address = $attr->{value};
+		unless ($address =~ /\@/) {
+		    # Mailman 2.x adds URL-encoding
+		    $address =~ s/%([0-9a-fA-F]{2})/sprintf("%c", hex($1))/ge;
+		}
+		if (grep { $_ eq $address } @addresses) {
+		    last member_chunk;
+		} else {
+		    push(@addresses, $address);
+		}
+	    }
+	}
+	last if $count == 0;
+	++$params{chunk};
+	$resp = $ua->post($url, \%params);
+    }
+    return @addresses;
+}
+
+sub remove_matching_subscribers {
+    my ($list, $config, $pattern) = @_;
+    my @addresses = list_subscribers($list, $config);
+    if (defined($pattern) and $pattern ne "") {
+	@addresses = grep { /$pattern/ } @addresses;
+    }
+    my $msg = remove_subscribers($list, $config, @addresses);
+    if ($msg eq "OK") {
+	print "Removed:\n  ", join("\n  ", @addresses), "\n";
+    } else {
+	print $msg, "\n";
+    }
+}
+
+sub read_address_file {
+    my ($file, $assert_nonempty) = @_;
+    my @list = ();
+    open(F, $file) || die "$file: $!\n";
+    while (<F>) {
+	s/(^|\s)\#.*//;
+	s/^\s+//;
+	s/\s+$//;
+	next if /^$/;
+	push(@list, $_);
+    }
+
+    die "$file: no lines, aborting\n" if $assert_nonempty && @list == 0;
+    return @list;
 }
 
 sub submit_http {

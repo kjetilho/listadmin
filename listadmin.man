@@ -6,7 +6,8 @@
 .SH NAME
 listadmin \- process messages held by Mailman for approval
 .SH SYNOPSIS
-.B "listadmin [-f \fIconfigfile\fP] [-t \fIminutes\fP] [\fIlistname\fP]"
+.B "listadmin [-f \fIconfigfile\fP] [-t \fIminutes\fP] [{-a|-r} \fIfile\fP]
+	[-l] [\fIlistname\fP]"
 .SH DESCRIPTION
 .I listadmin
 is a textual alternative to Mailman's WWW interface for administering
@@ -18,6 +19,14 @@ default (\fB~/.listadmin.ini\fP).
 .IP "-t \fIminutes\fP"
 Stop processing after \fIminutes\fP has passed.  Mostly useful for
 completely automated configurations of \fBlistadmin\fP.
+.IP "-a \fIfile\fP"
+Add e-mail addresses listed in \fIfile\fP (one address per line) to
+subscriber list.  The welcome message is suppressed.
+.IP "-r \fIfile\fP"
+Remove e-mail addresses listed in \fIfile\fP (one address per line)
+from the subscriber list.
+.IP "-l"
+Display the subscriber list.
 .IP "\fIlistname\fP"
 Only process the lists matching \fIlistname\fP.  Specify a complete
 address, a substring or a regular expression.
@@ -180,6 +189,15 @@ used.
 As above, but backwards.
 .IP .
 Redisplay information about current message.
+.IP add [\fIaddress\fP]
+Add \fIaddress\fP as subscriber to the list with "nomail" enabled.  If
+\fIaddress\fP is left out, use the sender of the current message.
+.IP list [\fIpattern\fP]
+List subscriber addresses matching \fIpattern\fP, or the full list if
+no \fIpattern\fP is specified.
+.IP rem \fIpattern\fP
+Remove addresses matching \fIpattern\fP from the subscriber list.
+Note: there is no undo for this action.
 .IP q
 Quit processing this list and go on to the next.
 .RE
