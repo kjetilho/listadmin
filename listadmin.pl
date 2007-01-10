@@ -395,7 +395,7 @@ _end_
 	    } elsif ($ans =~ /^add(\s+|$)/) {
 		my $addr = $POSTMATCH || $from;
 		my $res = add_subscribers($list, $config, 1, $addr);
-		for my $addr (keys %{$subscribe_result}) {
+		for my $addr (keys %{$res}) {
 		    print "$addr: $res->{$addr}\n";
 		}
 		print "done\n";
@@ -415,7 +415,7 @@ _end_
 		if ($c =~ /^\s*(ja?|y|yes)\s*$/i) {
 		    print "removing...\n";
 		    my $res = remove_subscribers($list, $config, @list);
-		    for my $addr (keys %{$subscribe_result}) {
+		    for my $addr (keys %{$res}) {
 			print "$addr: $res->{$addr}\n";
 		    }
 		    print "done\n";
@@ -1335,15 +1335,20 @@ sub add_subscribers {
     my $result = parse_subscribe_response($resp->content);
 
     if ($nomail) {
+	my %left = map { $_ => 1 } @addresses;
+	for my $failed (keys %{$result}) {
+	    delete $left{$failed};
+	}
+	@addresses = keys %left;
+
 	%params = (username => $config->{user},
 		   adminpw => $config->{password},
-		   $params{user} => \@addresses,
+		   user => \@addresses,
 		   setmemberopts_btn => "submit");	# Mailman 2.x
 	for my $a (@addresses) {
 	    $params{$a . "_nomail"} = "on";
 	    $params{$a . "_subscribed"} = "on";		# Mailman 1.2
 	}
-	print Dumper($url, \%params);
 	$resp = $ua->post($url, \%params);
 	return $resp->status_line unless $resp->is_success;
     }
