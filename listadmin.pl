@@ -171,15 +171,20 @@ for (@lists) {
 	    if ($c =~ /^\s*(\?+|h|hj?elp)\s*$/i) {
 		print <<_END_;
 Nothing will be done to the messages in the administrative queue
-unless you answer this question affirmatively.
+unless you answer this question affirmatively.  If you answer "no",
+your changes will be discarded and listadmin will proceed to the
+next mailing list.  Type "undo" to go back to the current list.
 _END_
 		goto redo_confirm;
 	    }
 	    if ($c =~ /^\s*(no?|nei|skip)\s*$/i) {
 		print "skipping ...\n";
 		next;
-	    } elsif ($c =~ /^\d$/) {
+	    } elsif ($c =~ /^\d+$/) {
 		$num = $c - 1;
+		goto restart_approval;
+	    } elsif ($c =~ /^u(ndo)?/) {
+		--$num;
 		goto restart_approval;
 	    } elsif ($c !~ /^\s*(|ja?|y|yes)\s*$/i) {
 		goto redo_confirm;
@@ -359,7 +364,7 @@ _end_
 		next msgloop;
 	    } elsif ($ans eq "a" || $ans eq "d") {
 		# If it is automatically discarded, add it to existing list
-		push(@undo_list, []) unless $match;
+		push(@undo_list, []) unless $match && @undo_list;
 		push(@{$undo_list[$#undo_list]}, $num);
 		$change->{$id} = [ $ans ];
 		$dont_skip_forward = 0;
