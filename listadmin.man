@@ -195,9 +195,9 @@ Add \fIaddress\fP as subscriber to the list with "nomail" enabled.  If
 .IP list [\fIpattern\fP]
 List subscriber addresses matching \fIpattern\fP, or the full list if
 no \fIpattern\fP is specified.
-.IP rem \fIpattern\fP
-Remove addresses matching \fIpattern\fP from the subscriber list.
-Note: there is no undo for this action.
+.IP rem \fIaddress\fP
+Remove \fIaddress\fP from the subscriber list.  Note: there is no undo
+for this action.
 .IP q
 Quit processing this list and go on to the next.
 .RE

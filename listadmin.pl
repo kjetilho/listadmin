@@ -400,21 +400,11 @@ _end_
 		}
 		print "done\n";
 	    } elsif ($ans =~ /^rem(\s+|$)/) {
-		my $patt = $POSTMATCH;
-		if ($patt eq "") {
-		    print "You need to specify a pattern\n";
-		    next;
-		}
-		my @list = grep { /$patt/ } list_subscribers($list, $config);
-		if (@list == 0) {
-		    print "No matching addresses\n";
-		    next;
-		}
-		print "Matching addresses:\n  ", join ("\n  ", @list), "\n";
-		my $c = prompt ("Remove subscribers? (there is no undo!) [no] ");
+		my $address = $POSTMATCH;
+		my $c = prompt ("Remove subscriber? (there is no undo!) [no] ");
 		if ($c =~ /^\s*(ja?|y|yes)\s*$/i) {
 		    print "removing...\n";
-		    my $res = remove_subscribers($list, $config, @list);
+		    my $res = remove_subscribers($list, $config, $address);
 		    for my $addr (keys %{$res}) {
 			print "$addr: $res->{$addr}\n";
 		    }
@@ -536,7 +526,7 @@ and pressing Return.
   .              -- redisplay entry
   add [address]  -- add nomail subscription for address (defaults to From)
   list [pattern] -- list mailing list members matching optional pattern
-  rem pattern    -- remove list member addresses matching pattern
+  rem address    -- remove list member
   q  Quit        -- go on to the next list
 
 end
