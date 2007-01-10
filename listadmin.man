@@ -267,7 +267,10 @@ The default configuration file.
 .SH BUGS
 The HTML parser is quite fragile and depends on Mailman not to change
 the format of its generated code.
-
+.PP
+An extra blank line is sometimes added to the subject when it contains
+double width characters (e.g. Chinese).  This is probably a bug in
+Text::Reform.
 .SH AUTHOR
 Kjetil T. Homme <kjetilho+listadmin@ifi.uio.no>
 .br
