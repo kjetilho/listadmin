@@ -822,9 +822,11 @@ sub degrade_charset {
     # STDOUT tells Perl to once more translate it into the terminal's
     # character set.
 
-    $text = Encode::decode($term_encoding,
-			   Encode::encode($term_encoding, $text,
-					  Encode::FB_HTMLCREF));
+    eval {
+	$text = Encode::decode($term_encoding,
+			       Encode::encode($term_encoding, $text,
+					      Encode::FB_HTMLCREF));
+    }
 
     # The built-in formats for unprintable glyphs are ugly, and to be
     # allowed to specify a code ref which returns our preferred format
