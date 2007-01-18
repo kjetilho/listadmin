@@ -1,7 +1,7 @@
 SHELL = /bin/sh
 INSTALL = install -c
 
-VERSION = 2.35
+VERSION = 2.36
 
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin

@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.35
+# listadmin version 2.36
 # Written 2003 - 2007 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 #
@@ -825,8 +825,8 @@ sub degrade_charset {
     eval {
 	$text = Encode::decode($term_encoding,
 			       Encode::encode($term_encoding, $text,
-					      Encode::FB_HTMLCREF));
-    }
+					      Encode::FB_HTMLCREF))
+	    };
 
     # The built-in formats for unprintable glyphs are ugly, and to be
     # allowed to specify a code ref which returns our preferred format
