@@ -11,11 +11,12 @@
 
 use HTML::TokeParser;
 use LWP::UserAgent;
+# use LWP::Debug qw(+trace);
 use MIME::Base64;
 use MIME::QuotedPrint;
 use Data::Dumper;
 use Term::ReadLine;
-use Getopt::Std;
+use Getopt::Long;
 use Text::Reform;
 use I18N::Langinfo qw(langinfo CODESET); # appeared in Perl 5.7.2
 use Encode; # appeared in perl 5.7.1
@@ -25,35 +26,68 @@ use English;
 my $rc = $ENV{"HOME"}."/.listadmin.ini";
 
 sub usage {
+    my ($exit_val) = @_;
     print STDERR <<_end_;
 Usage: $0 [-f CONFIGFILE] [-t MINUTES] [{-a|-r} FILE] [-l] [LISTNAME]
   -f CONFIGFILE    Read configuration from CONFIGFILE.
                    (default: $rc)
   -t MINUTES       Stop processing after MINUTES minutes.  Decimals are
                    allowed.
+  --mail           Turn off "nomail" flag for the specified addresses
+  --nomail         Turn on "nomail" flag for the specified addresses
   -a FILE          Add e-mail addresses in FILE to list
   -r FILE          Remove e-mail addresses in FILE to list
+  --add-member ADDRESS
+                   Add ADDRESS as member to list
+  --remove-member ADDRESS
+                   Remove ADDRESS from member list
   -l               List subscribers
   LISTNAME         Only process lists with name matching LISTNAME.
 
-If -a, -r or -l is given, LISTNAME must match exactly one list.
+If options which modify members are used, LISTNAME must match exactly
+one list.
 _end_
-    exit (64);
+    exit(defined $exit_val ? $exit_val : 64);
 }
 
-our ($opt_f, $opt_t, $opt_a, $opt_r, $opt_l);
+my ($opt_help, $opt_f, $opt_t, $opt_a, $opt_r,
+    @opt_add_member, @opt_remove_member, $opt_l);
+my $opt_mail = 1;
 
-usage() unless getopts('f:t:a:r:l');
+GetOptions("help|?" => \$opt_help,
+           "f=s" => \$opt_f,
+	   "t=i" => \$opt_t,
+	   "mail!" => \$opt_mail,
+	   "a=s" => \$opt_a,
+	   "r=s" => \$opt_r,
+	   "add-member=s" => \@opt_add_member,
+	   "remove-member=s" => \@opt_remove_member,
+	   "l" => \$opt_l)
+	or usage();
+
+usage(0) if $opt_help;
 
 $rc = $opt_f if $opt_f;
 usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
-usage() if defined $opt_a && defined $opt_r;
-usage() if defined $opt_l && (defined $opt_a || defined $opt_r);
 
-my $ua = new LWP::UserAgent ("timeout" => 900);
+push(@opt_add_member, read_address_file($opt_a, 1)) if defined $opt_a;
+push(@opt_remove_member, read_address_file($opt_r, 1)) if defined $opt_r;
+
+my $will_modify_membership = 0;
+++$will_modify_membership if @opt_add_member;
+++$will_modify_membership if @opt_remove_member;
+
+usage() if $will_modify_membership > 1;
+usage() if defined $opt_l && $will_modify_membership;
+
+my $ua = new LWP::UserAgent("timeout" => 900, "env_proxy" => 1);
 my $time_limit = time + 60 * ($opt_t || 24*60);
 my $term;
 my $term_encoding = langinfo(CODESET());
+
+# the C and POSIX locale in Solaris uses the charset "646", but Perl
+# doesn't support it.
+$term_encoding = "ascii" if $term_encoding eq "646";
 binmode STDOUT, ":encoding($term_encoding)";
 # Turn on autoflush on STDOUT
 $| = 1;
@@ -79,19 +113,22 @@ if (@ARGV) {
     @lists = sort config_order keys %{$config}
 }
 
-if (@lists > 1 && (defined $opt_r || defined $opt_a || defined $opt_l)) {
+if (@lists > 1 && ($will_modify_membership || defined $opt_l)) {
     print STDERR "Too many matching lists\n";
+    print Dumper(\@lists);
     usage();
 }
 
 my $list = $lists[0];
+
 my $subscribe_result;
-if (defined $opt_a) {
-    my @addresses = read_address_file($opt_a, 1);
-    $subscribe_result = add_subscribers($list, $config->{$list}, 0, @addresses);
-} elsif (defined $opt_r) {
-    my @addresses = read_address_file($opt_r, 1);
-    $subscribe_result = remove_subscribers($list, $config->{$list}, @addresses);
+if (@opt_add_member) {
+    $subscribe_result = add_subscribers($list, $config->{$list}, $opt_mail,
+					@opt_add_member);
+}
+if (@opt_remove_member) {
+    $subscribe_result = remove_subscribers($list, $config->{$list},
+					   @opt_remove_member);
 }
 if (defined $subscribe_result) {
     for my $addr (keys %{$subscribe_result}) {
@@ -392,9 +429,10 @@ _end_
 		}
 		print join("\n  ", @list);
 		print "\n$member_count members in total\n";
-	    } elsif ($ans =~ /^add(\s+|$)/) {
+	    } elsif ($ans =~ /^(add|nomail)(\s+|$)/) {
+		my $mail = $1 eq "add";
 		my $addr = $POSTMATCH || $from;
-		my $res = add_subscribers($list, $config, 1, $addr);
+		my $res = add_subscribers($list, $config, $mail, $addr);
 		for my $addr (keys %{$res}) {
 		    print "$addr: $res->{$addr}\n";
 		}
@@ -462,8 +500,8 @@ _end_
 	    } elsif ($ans eq "f") {
 		# Since the raw bytes aren't really Unicode, we set
 		# the replacement sequence to be "<?>" unconditionally.
-		print degrade_charset($info->{$id}{"headers"} . "\n\n" . $info->{$id}{"body"},
-				      "questionmark");
+		print degrade_charset($info->{$id}{"headers"} . "\n\n" .
+				      $info->{$id}{"body"}, "questionmark");
 	    } elsif ($ans eq "b") {
 		my $head = $info->{$id}{"headers"};
 		my $text = $info->{$id}{"body"};
@@ -524,7 +562,8 @@ and pressing Return.
   /pattern       -- search for next message with matching From or Subject
   ?pattern       -- search for previous message with matching From or Subject
   .              -- redisplay entry
-  add [address]  -- add nomail subscription for address (defaults to From)
+  add [address]  -- add subscription for address (defaults to From)
+  nomail [address] -- add nomail subscription for address (defaults to From)
   list [pattern] -- list mailing list members matching optional pattern
   rem address    -- remove list member
   q  Quit        -- go on to the next list
@@ -1309,7 +1348,7 @@ sub log_timestamp {
 }
 
 sub add_subscribers {
-    my ($list, $config, $nomail, @addresses) = @_;
+    my ($list, $config, $mail, @addresses) = @_;
 
     die unless @addresses;
 
@@ -1326,19 +1365,31 @@ sub add_subscribers {
 
     my $result = parse_subscribe_response($resp->content);
 
-    if ($nomail) {
+    if (!$mail) {
 	my %left = map { $_ => 1 } @addresses;
 	for my $failed (keys %{$result}) {
-	    delete $left{$failed};
+	    unless ($result->{$failed} =~ /Already a member/) {
+		delete $left{$failed};
+	    }
 	}
 	@addresses = keys %left;
-
+    } else {
+	# We only need to reset "nomail" on the users who already were
+	# members.
+	@addresses = ();
+	for my $failed (keys %{$result}) {
+	    if ($result->{$failed} =~ /Already a member/) {
+		push(@addresses, $failed);
+	    }
+	}
+    }
+    if (@addresses) {
 	%params = (username => $config->{user},
 		   adminpw => $config->{password},
 		   user => \@addresses,
 		   setmemberopts_btn => "submit");	# Mailman 2.x
 	for my $a (@addresses) {
-	    $params{$a . "_nomail"} = "on";
+	    $params{$a . "_nomail"} = "on" unless $mail;
 	    $params{$a . "_subscribed"} = "on";		# Mailman 1.2
 	}
 	$resp = $ua->post($url, \%params);
@@ -1391,7 +1442,7 @@ sub parse_subscribe_response {
 	$parse->get_tag ("ul") || die;
 	my $ul = $parse->get_text ("/ul") || die;
 
-	if ($h5 =~ /Successfully (un)?subscribed/i) {
+	if ($h5 =~ /Successfully ((un)?subscribed|Removed)/i) {
 	    # hooray!
 	} elsif ($h5 =~ /Error (un)?subscribing/i) {
 	    for (split(/\n/, $ul)) {
@@ -1427,33 +1478,69 @@ sub list_subscribers {
 
     my @addresses = ();
     my ($parse, $page, $tag);
-    my $chunk = 0;
 
- member_chunk:
-    while ($resp->is_success) {
-	$page = $resp->content;
-	$parse = HTML::TokeParser->new(\$page);
-	my $count = 0;
-	while ($tag = $parse->get_tag("input")) {
-	    my $attr = $tag->[1];
-	    if ($attr->{type} =~ /^hidden$/i &&
-		$attr->{name} =~ /^user$/i) {
-		++$count;
-		my $address = $attr->{value};
-		unless ($address =~ /\@/) {
-		    # Mailman 2.x adds URL-encoding
-		    $address =~ s/%([0-9a-fA-F]{2})/sprintf("%c", hex($1))/ge;
-		}
-		if (grep { $_ eq $address } @addresses) {
-		    last member_chunk;
-		} else {
-		    push(@addresses, $address);
+ member_letter:
+    for my $letter ("a" .. "z") {
+	my $chunk = 0;
+
+	$params{chunk} = $chunk;
+
+	# Mailman 2.x specifically looks at QUERY_STRING, so chunk and
+	# letter can't be parameters to POST.  However, Mailman 1.x
+	# only looks at chunk in the POST parameters.
+	$resp = $ua->post("$url?letter=$letter&chunk=$chunk", \%params)
+		unless $letter eq "a";
+
+	while ($resp->is_success) {
+	    $page = $resp->content;
+	    $parse = HTML::TokeParser->new(\$page);
+	    my $count = 0;
+	    my $repeated = 0;
+	    my $later_letter = 0;
+	    while ($tag = $parse->get_tag("input")) {
+		my $attr = $tag->[1];
+		if ($attr->{type} =~ /^hidden$/i &&
+		    $attr->{name} =~ /^user$/i) {
+		    ++$count;
+		    my $address = $attr->{value};
+		    unless ($address =~ /\@/) {
+			# Mailman 2.x adds URL-encoding
+			$address =~ s/%([0-9a-fA-F]{2})/sprintf("%c", hex($1))/ge;
+		    }
+		    ++$later_letter if lc(substr($address, 0, 1)) gt $letter;
+		    if (grep { $_ eq $address } @addresses) {
+			++$repeated;
+		    } else {
+			push(@addresses, $address);
+		    }
 		}
 	    }
+	    last if $count == 0;
+
+	    # In Mailman 1.x, "letter" is a no-op, so $later_letter
+	    # will ~always be true and should be ignored.  Increase
+	    # chunk until we see repeats.
+
+	    # In Mailman 2.x, we need to iterate through both letter
+	    # and chunk, but if the list has few members, they will
+	    # all be listed and letter and chunk are ignored.  Also,
+	    # if there are no members for a given letter, the whole
+	    # list will be returned.
+
+	    if ($repeated) {
+		last member_letter if $later_letter;
+		next member_letter;
+	    }
+
+	    # The maximum number of addresses on each page can be
+	    # configured, by default it is set to 30, but it could in
+	    # theory be less.  To save time, we assume that we have
+	    # all the members if we got less than 20 addresses.
+	    next member_letter if $count < 20;
+
+	    ++$chunk; $params{chunk} = $chunk;
+	    $resp = $ua->post("$url?letter=$letter&chunk=$chunk", \%params);
 	}
-	last if $count == 0;
-	++$params{chunk};
-	$resp = $ua->post($url, \%params);
     }
     return @addresses;
 }
