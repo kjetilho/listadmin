@@ -1,6 +1,6 @@
 #! /usr/bin/perl -w
 #
-# listadmin version 2.36
+# listadmin - process messages held by Mailman for approval
 # Written 2003 - 2007 by
 # Kjetil Torgrim Homme <kjetilho+listadmin@ifi.uio.no>
 #
@@ -8,6 +8,8 @@
 # feedback.
 #
 # Released into public domain.
+
+my $version = "2.37";
 
 use HTML::TokeParser;
 use LWP::UserAgent;
@@ -50,11 +52,12 @@ _end_
     exit(defined $exit_val ? $exit_val : 64);
 }
 
-my ($opt_help, $opt_f, $opt_t, $opt_a, $opt_r,
+my ($opt_help, $opt_version, $opt_f, $opt_t, $opt_a, $opt_r,
     @opt_add_member, @opt_remove_member, $opt_l);
 my $opt_mail = 1;
 
 GetOptions("help|?" => \$opt_help,
+	   "version|V" => \$opt_version,
            "f=s" => \$opt_f,
 	   "t=i" => \$opt_t,
 	   "mail!" => \$opt_mail,
@@ -66,6 +69,10 @@ GetOptions("help|?" => \$opt_help,
 	or usage();
 
 usage(0) if $opt_help;
+if ($opt_version) {
+    print "listadmin version $version\n";
+    exit(0);
+}
 
 $rc = $opt_f if $opt_f;
 usage() if defined $opt_t && $opt_t !~ /\d/ && $opt_t !~ /^\d*(\.\d*)?$/;
