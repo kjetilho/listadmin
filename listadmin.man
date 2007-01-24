@@ -6,8 +6,9 @@
 .SH NAME
 listadmin \- process messages held by Mailman for approval
 .SH SYNOPSIS
-.B "listadmin [-f \fIconfigfile\fP] [-t \fIminutes\fP] [{-a|-r} \fIfile\fP]
-	[-l] [\fIlistname\fP]"
+.B listadmin [-?] [-V] [-f \fIconfigfile\fP] [-t \fIminutes\fP] \
+[--mail] [--nomail] [{-a|-r} \fIfile\fP] [--add-member \fIaddress\fP] \
+[--remove-member \fIaddress\fP] [-l] [\fIlistname\fP]
 .SH DESCRIPTION
 .I listadmin
 is a textual alternative to Mailman's WWW interface for administering
@@ -19,17 +20,29 @@ default (\fB~/.listadmin.ini\fP).
 .IP "-t \fIminutes\fP"
 Stop processing after \fIminutes\fP has passed.  Mostly useful for
 completely automated configurations of \fBlistadmin\fP.
+.IP "--mail"
+Addresses added as subscribers will have \fInomail\fP turned off.
+.IP "--nomail"
+Addresses added as subscribers will have \fInomail\fP turned on.
 .IP "-a \fIfile\fP"
 Add e-mail addresses listed in \fIfile\fP (one address per line) to
-subscriber list.  The welcome message is suppressed.
+the subscriber list.  The welcome message is suppressed.
+.IP "--add-member \fIaddress\fP"
+Add \fIaddress\fP to the subscriber list, works as above.
 .IP "-r \fIfile\fP"
 Remove e-mail addresses listed in \fIfile\fP (one address per line)
 from the subscriber list.
+.IP "--remove-member \fIaddress\fP"
+Remove \fIaddress\fP from the subscriber list.
 .IP "-l"
 Display the subscriber list.
 .IP "\fIlistname\fP"
 Only process the lists matching \fIlistname\fP.  Specify a complete
 address, a substring or a regular expression.
+.IP "-? or --help"
+Display short usage description.
+.IP "-V or --version"
+Output version number.
 .SH CONFIGURATION SYNTAX
 
 The configuration file contains lines which can contain either a
@@ -190,8 +203,10 @@ As above, but backwards.
 .IP .
 Redisplay information about current message.
 .IP add [\fIaddress\fP]
-Add \fIaddress\fP as subscriber to the list with "nomail" enabled.  If
-\fIaddress\fP is left out, use the sender of the current message.
+Add \fIaddress\fP as subscriber to the list.  If \fIaddress\fP is left
+out, use the sender of the current message.
+.IP nomail [\fIaddress\fP]
+As \fIadd\fP, but adds \fIaddress\fP with "nomail" enabled.
 .IP list [\fIpattern\fP]
 List subscriber addresses matching \fIpattern\fP, or the full list if
 no \fIpattern\fP is specified.
@@ -258,6 +273,14 @@ An example configuration file:
 	confirm no
 	foo-announce@example.net
 .fi
+
+.SH ENVIRONMENT
+.IP "\fBhttp_proxy\fP or \fBHTTP_PROXY\fP"
+Specifies a proxy to use for HTTP.
+.IP "\fBhttps_proxy\fP or \fBHTTPS_PROXY\fP"
+Specifies a proxy to use for HTTPS.
+.IP \fBLC_CTYPE\fP
+The character set support is deduced from this variable.
 
 .SH FILES
 \fB$HOME/.listadmin.ini\fP
