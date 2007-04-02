@@ -1589,7 +1589,9 @@ sub submit_http {
     if ($logfile) {
 	if (open (LOG, ">>$logfile")) {
 	    LOG->autoflush(1);
-	    binmode LOG, ":encoding(" . langinfo(CODESET()) . ")";
+	    # Perhaps we should force the encoding to US-ASCII
+	    # instead, but I think this is more DWIM compliant.
+	    binmode LOG, ":encoding($term_encoding)";
 	    $opened = 1;
 	    local $SIG{__WARN__} = sub {}; # see comment elsewhere
 	    print LOG $log;
@@ -1634,6 +1636,9 @@ sub prompt_password {
     my $answer;
     my $echooff;
 
+    # This doesn't actually work, since readline screws up and turns
+    # on "echo" for us :-(
+
     $SIG{'INT'} = $SIG{'TERM'} = \&restore_echo_and_exit;
     system("stty -echo 2>/dev/null");
     if ($? == 0) {
@@ -1655,7 +1660,10 @@ sub prompt {
     # is only done if the user actually needs prompting.
     $term = new Term::ReadLine 'listadmin'
 	    unless $term;
-    return ($term->readline (@_));
+    my $answer = $term->readline(@_);
+    # readline turns off autoflush, re-enable it
+    $| = 1;
+    return $answer;
 }
 
 sub config_order {
