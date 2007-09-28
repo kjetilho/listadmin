@@ -9,7 +9,8 @@
 #
 # Released into public domain.
 
-my $version = "2.37";
+my $version = "2.38";
+my $maintainer = "kjetilho+listadmin\@ifi.uio.no";
 
 use HTML::TokeParser;
 use LWP::UserAgent;
@@ -187,7 +188,7 @@ for (@lists) {
     if ($info->{'servererror'}) {
 	print "\n";
 	printf STDERR ("ERROR: fetching %s\n", $info->{'url'});
-	printf STDERR ("ERROR: Server returned '%s' -- skipping list\n",
+	printf STDERR ("ERROR: %s -- skipping list\n",
 		       $info->{'servererror'});
 	next;
     } elsif ($info->{'autherror'}) {
@@ -647,27 +648,46 @@ sub get_list {
 	return {'servererror' => $resp->status_line, 'url' => $url};
     }
     $page = $resp->content;
-    if ($page eq "") {
-	if (time - $starttime > 60) {
-	    print "Mailman server timed out?\n";
-	} else {
-	    print "empty page\n";
-	}
-	return {};
-    }
+
     my $dumpdir = $config->{"dumpdir"};
-    if (defined $dumpdir) {
-	if (open (DUMP, ">$dumpdir/dump-$list.html")) {
+    my $dumpfile;
+    if ($dumpdir && $page) {
+	$dumpfile = "$dumpdir/dump-$list.html";
+	if (open (DUMP, ">$dumpfile")) {
 	    print DUMP $page;
 	    close (DUMP);
 	}
     }
 
+    if ($page eq "") {
+	if (time - $starttime > 60) {
+	    return {servererror => "Mailman server timed out?", url => $url};
+	} else {
+	    return {servererror => "Empty page", url => $url};
+	}
+    } elsif ($page =~ get_trans_re("no_such_list")) {
+	return {servererror => "No such list", url => $url}
+    }
+
     my $parse = HTML::TokeParser->new(\$page) || die;
     $parse->get_tag ("title") || die;
     my $title = $parse->get_trimmed_text ("/title") || die;
-    if ($title =~ /authentication/i) {
+
+    if ($title =~ get_trans_re("authentication")) {
 	return {'autherror' => 1};
+    }
+
+    if ($page !~ get_trans_re("pending_req")) {
+	my $msg = "unexpected contents";
+	# Use rand() to protect a little against tmpfile races
+	$dumpfile ||= "/tmp/dump-" . rand() . "-$list.html";
+	if (open(DUMP, ">$dumpfile")) {
+	    chmod(0600, $dumpfile);
+	    print DUMP $page;
+	    close(DUMP);
+	    $msg .= ", please send $dumpfile to $maintainer";
+	}
+	return {servererror => $msg, url => $url};
     }
 
     my @mailman_mentions = grep {/Mailman/} split (/\n/, $page);
@@ -678,10 +698,7 @@ sub get_list {
 	}
     }
     unless ($mmver) {
-	if ($page =~ /no such list/i) {
-	    return {'servererror' => "No such list", 'url' => $url}
-	}
-	die "Can not find version information in, please mail maintainer.";
+	die "Can not find version information, please mail maintainer.";
     }
 
     if ($mmver ge "2.1") {
@@ -719,7 +736,7 @@ sub parse_pages_mm_old {
     $parse->get_tag ("hr");
     $parse->get_tag ("h2") || return \%data;
     my $headline = $parse->get_trimmed_text ("/h2") || die;
-    if ($headline =~ /subscription/i) {
+    if ($headline =~ get_trans_re("headline_subscr")) {
 	parse_subscriptions ($mmver, $config, $parse, \%data);
 	$token = $parse->get_token;
 	if (lc ($token->[1]) eq "input") {
@@ -729,7 +746,7 @@ sub parse_pages_mm_old {
 	    $headline = $parse->get_trimmed_text ("/h2") || die;
 	}
     }
-    if ($headline =~ /held for approval/i) {
+    if ($headline =~ get_trans_re("held_for_approval")) {
 	parse_approvals ($mmver, $config, $parse, \%data);
     } else {
 	$parse->get_tag ("hr") || die;
@@ -799,6 +816,60 @@ sub parse_approvals {
 	$token = $parse->get_token
 		if ($token->[0] eq "S" && lc ($token->[1]) eq "center");
     } until ($token->[0] eq "S" && lc ($token->[1]) eq "input");
+}
+
+sub get_trans_re {
+    my ($key) = @_;
+
+    # Handle translations -- poorly...
+    #
+    # For now, we look for strings in all languages at the same time
+    # since they don't seem to overlap.  This might have to change
+    # later.
+    #
+    # Please send additions if you have them.
+
+    my %translations =
+	    ("authentication" =>
+	     {
+	      "en" => "authentication",
+	      "fr" => "authentification",
+	     },
+	     "subscr_success" =>
+	     {
+	      "en" => "Successfully ((un)?subscribed|Removed)",
+	      "de" => "Erfolgreich (ein|aus)getragen",
+	     },
+	     "subscr_error" =>
+	     {
+	      "en" => "Error (un)?subscribing",
+	     },
+	     "no_such_list" =>
+	     {
+	      "en" => "Mailman Admindb Error.*No such list:",
+	     },
+	     "pending_req" =>
+	     {
+	      "en" => "(current set of administrative|pending request)",
+	     },
+	     "headline_subscr" =>
+	     {
+	      "en" => "subscription",
+	     },
+	     "held_for_approval" =>
+	     {
+	      "en" => "held for approval",
+	     },
+	     "already_member" =>
+	     {
+	      "en" => "Already a member",
+	     },
+	    );
+
+    my $t = $translations{$key};
+    die "INTERNAL ERROR: Unknown translation key '$key'\n"
+	    unless defined $t;
+    return "(?i)(" . join("|", values %{$t}) . ")";
 }
 
 sub guess_charset {
@@ -1375,7 +1446,7 @@ sub add_subscribers {
     if (!$mail) {
 	my %left = map { $_ => 1 } @addresses;
 	for my $failed (keys %{$result}) {
-	    unless ($result->{$failed} =~ /Already a member/) {
+	    unless ($result->{$failed} =~ get_trans_re("already_member")) {
 		delete $left{$failed};
 	    }
 	}
@@ -1385,7 +1456,7 @@ sub add_subscribers {
 	# members.
 	@addresses = ();
 	for my $failed (keys %{$result}) {
-	    if ($result->{$failed} =~ /Already a member/) {
+	    if ($result->{$failed} =~ get_trans_re("already_member")) {
 		push(@addresses, $failed);
 	    }
 	}
@@ -1449,9 +1520,9 @@ sub parse_subscribe_response {
 	$parse->get_tag ("ul") || die;
 	my $ul = $parse->get_text ("/ul") || die;
 
-	if ($h5 =~ /Successfully ((un)?subscribed|Removed)/i) {
+	if ($h5 =~ get_trans_re("subscr_success")) {
 	    # hooray!
-	} elsif ($h5 =~ /Error (un)?subscribing/i) {
+	} elsif ($h5 =~ get_trans_re("subscr_error")) {
 	    for (split(/\n/, $ul)) {
 		chomp;
 		if (/^\s*(.*?)\s*--\s*(.*)/) {
@@ -1461,7 +1532,7 @@ sub parse_subscribe_response {
 	} else {
 	    $ul =~ s/\n/\n\t/g;
 	    print STDERR "You have an unusual Mailman output.  Please mail ".
-		    "this message to\nkjetilho+listadmin\@ifi.uio.no:\n".
+		    "this message to\n$maintainer\n:\n".
 		    "\t[$h5]\n\t[$ul]\nThanks!\n";
 	}
 	$parse->get_tag ("p") || die;
@@ -1636,8 +1707,8 @@ sub prompt_password {
     my $answer;
     my $echooff;
 
-    # This doesn't actually work, since readline screws up and turns
-    # on "echo" for us :-(
+    # This might not work, since some versions of readline screw up
+    # and turn on "echo" for us :-(
 
     $SIG{'INT'} = $SIG{'TERM'} = \&restore_echo_and_exit;
     system("stty -echo 2>/dev/null");
