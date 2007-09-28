@@ -1,11 +1,13 @@
 SHELL = /bin/sh
-INSTALL = install -c
+# a BSD or GNU style install is required, e.g., /usr/ucb/install on Solaris
+INSTALL = install
 
-VERSION = 2.37
+VERSION = 2.38
 
 PREFIX = /usr/local
-BINDIR = $(PREFIX)/bin
-MANDIR = $(PREFIX)/share/man
+prefix = $(PREFIX)
+bindir = $(prefix)/bin
+mandir = $(prefix)/share/man
 
 SRCFILES = Makefile listadmin.pl listadmin.man
 
@@ -13,8 +15,9 @@ all:
 	@echo Nothing needs to be done
 
 install:
-	$(INSTALL) listadmin.pl $(bindir)/listadmin
-	$(INSTALL) -m 644 listadmin.man $(mandir)/man1/listadmin.1
+	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(mandir)/man1
+	$(INSTALL) -m 755 listadmin.pl $(DESTDIR)$(bindir)/listadmin
+	$(INSTALL) -m 644 listadmin.man $(DESTDIR)$(mandir)/man1/listadmin.1
 
 listadmin.txt: listadmin.man
 #	Note the verbatim backspace in the sed command
