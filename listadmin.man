@@ -161,10 +161,13 @@ in local time.  Then one line for each message, in the format
 .IP
 \fIaction\fP D:[\fIdate\fP] F:[\fIsender\fP] S:[\fIsubject\fP]
 .IP
-This batch of lines are terminated by a line saying \fBchanges sent to
+This batch of lines is terminated by a line saying \fBchanges sent to
 server\fP.
 .IP
-The filename \fBnone\fP turns off logging.
+The same substitutions are performed on \fIfilename\fP as on the
+argument to \fBadminurl\fP.  Tilde syntax can be used to refer to home
+directories.  The filename \fBnone\fP turns off logging.
+
 \" "dumpdir" is for developer use, so it isn't documented.
 
 .SH INTERACTIVE USE

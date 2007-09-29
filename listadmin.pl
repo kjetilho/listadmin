@@ -1372,6 +1372,8 @@ sub commit_changes {
     my $params = mailman_params ($user, $pw);
 
     my $log = log_timestamp ($list);
+    # Expand {list}, {subdomain} and {domain}
+    $logfile = mailman_url($list, $logfile);
 
     for my $id (sort { $a <=> $b } keys %{$change}) {
 	my ($what, $text) = @{$change->{$id}};
