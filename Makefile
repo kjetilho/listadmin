@@ -2,7 +2,7 @@ SHELL = /bin/sh
 # a BSD or GNU style install is required, e.g., /usr/ucb/install on Solaris
 INSTALL = install
 
-VERSION = 2.38
+VERSION = 2.39
 
 PREFIX = /usr/local
 prefix = $(PREFIX)
