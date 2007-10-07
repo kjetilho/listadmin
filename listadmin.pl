@@ -9,7 +9,7 @@
 #
 # Released into public domain.
 
-my $version = "2.39";
+my $version = "2.40";
 my $maintainer = "kjetilho+listadmin\@ifi.uio.no";
 
 use HTML::TokeParser;
