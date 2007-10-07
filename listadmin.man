@@ -167,6 +167,12 @@ server\fP.
 The same substitutions are performed on \fIfilename\fP as on the
 argument to \fBadminurl\fP.  Tilde syntax can be used to refer to home
 directories.  The filename \fBnone\fP turns off logging.
+.IP "meta_member_support \fIyes|no\fP"
+Meta members are an experimental feature at the University of Oslo.
+This option is enabled by default for lists in uio.no, and is needed
+to avoid clearing the list of meta members when manipulating the list
+of ordinary members.  \fINote: Requires additional Perl module
+WWW::Mechanize\fP
 
 \" "dumpdir" is for developer use, so it isn't documented.
 

@@ -253,7 +253,7 @@ sub process_subscriptions {
 	}
     }
     my $count = keys (%subscribers);
-    my $def = $config->{"subdef"};
+    my $def = $config->{"subdefault"};
     my $prompt = 'Accept/Reject/Skip/Quit';
     $prompt .= " [" . uc($def) . "]" if $def;
     $prompt .= " ? ";
@@ -267,7 +267,7 @@ sub process_subscriptions {
 	print "         subscription request\n";
 	my $ans;
 	while (1) {
-	    $ans = $config->{"subact"};
+	    $ans = $config->{"subaction"};
 	    $ans ||= prompt ($prompt);
 	    $ans = "q" unless defined $ans;
 	    $ans =~ s/\s+//g;
@@ -833,6 +833,7 @@ sub get_trans_re {
 	    ("authentication" =>
 	     {
 	      "en" => "authentication",
+	      "de" => "Authentifikation",
 	      "fr" => "authentification",
 	     },
 	     "subscr_success" =>
@@ -851,6 +852,7 @@ sub get_trans_re {
 	     "pending_req" =>
 	     {
 	      "en" => "(current set of administrative|pending request)",
+	      "de" => "(gegenw&auml;rtigen administrativen|unbearbeiteten Anfragen)",
 	     },
 	     "headline_subscr" =>
 	     {
@@ -1094,29 +1096,24 @@ sub set_param_values {
 sub read_config {
     my ($file) = @_;
 
-    my ($user, $pw, $spam, $list);
+    my %cur = map { $_ => undef; }
+	    qw (not_spam_if_from
+		not_spam_if_subject
+		discard_if_from
+		discard_if_subject
+		discard_if_reason);
+    my $pattern_keywords = join ("|", keys %cur);
+
+    # Defaults:
+    $cur{user} = $cur{password} = $cur{action} = $cur{default} = "";
+    $cur{confirm} = 1;
+    $cur{unprintable} = "questionmark";
+
     my $conf = {};
     my $line = "";
-    my $subact;
-    my $subdef;
-    my $action = "";
-    my $default = "";
     my $count = 0;
     my $lineno = 0;
-    my $logfile;
-    my $dumpdir;
-    my $confirm = 1;
-    my $url;
-    my $spamheader;
-    my $unprintable = "questionmark";
-    my %patterns = map { $_ => undef; }
-                       qw (not_spam_if_from
-			   not_spam_if_subject
-			   discard_if_from
-			   discard_if_subject
-			   discard_if_reason);
-    my $pattern_keywords = join ("|", keys %patterns);
-    
+
     my %act = ("approve" => "a", "discard" => "d",
 	       "reject" => "r", "skip" => "s", "none" => "");
     my %sact = ("accept" => "a",
@@ -1138,77 +1135,61 @@ sub read_config {
 	$line =~ s/^\s+//;
 	next if /^$/;
 	if ($line =~ /^username\s+/i) {
-	    $user = unquote($POSTMATCH);
-	    if ($user !~ /^[a-z0-9._+-]+\@[a-z0-9.-]+$/) {
-		print STDERR "$file:$lineno: Illegal username: '$user'\n";
+	    $cur{user} = unquote($POSTMATCH);
+	    if ($cur{user} !~ /^[a-z0-9._+-]+\@[a-z0-9.-]+$/) {
+		print STDERR "$file:$lineno: Illegal username: '$cur{user}'\n";
 		exit 1;
 	    }
 	} elsif ($line =~ /^password\s+/i) {
-	    $pw = unquote($POSTMATCH);
+	    $cur{password} = unquote($POSTMATCH);
 	} elsif ($line =~ /^spamlevel\s+/i) {
-	    $spam = unquote($POSTMATCH);
-	    if ($spam =~ /^(\d+)\s*$/) {
-		$spam = $1;
+	    $cur{spamlevel} = unquote($POSTMATCH);
+	    if ($cur{spamlevel} =~ /^(\d+)\s*$/) {
+		$cur{spamlevel} = $1;
 	    } else {
-		print STDERR "$file:$lineno: Illegal value: '$spam'\n";
+		print STDERR "$file:$lineno: Illegal value: '$cur{spamlevel}'\n";
 		print STDERR "choose a positive numeric value\n";
 		exit 1;
 	    }
-	} elsif ($line =~ /^confirm\s+/i) {
-	    $confirm = unquote($POSTMATCH);
-	    if ($confirm eq "yes") {
-		$confirm = 1;
-	    } elsif ($confirm eq "no") {
-		$confirm = undef;
+	} elsif ($line =~ /^(confirm|meta_member_support)\s+/i) {
+	    my ($key, $value) = (lc($1), unquote($POSTMATCH));
+	    if ($value eq "yes") {
+		$value = 1;
+	    } elsif ($value eq "no") {
+		$value = undef;
 	    } else {
-		print STDERR "$file:$lineno: Illegal value: '$confirm'\n";
+		print STDERR "$file:$lineno: Illegal value: '$value\n";
 		print STDERR "choose one of yes or no\n";
 		exit 1;
 	    }
-	} elsif ($line =~ /^action\s+/i) {
-	    $action = unquote($POSTMATCH);
-	    unless (exists $act{$action}) {
-		print STDERR "$file:$lineno: Illegal value: '$action'\n";
+	    $cur{$key} = $value;
+	} elsif ($line =~ /^(action|default)\s+/i) {
+	    my ($key, $value) = (lc($1), unquote($POSTMATCH));
+	    unless (exists $act{$value}) {
+		print STDERR "$file:$lineno: Illegal value: '$value\n";
 		print STDERR "choose one of ",
                              join (", ", sort keys %act), "\n";
 		exit 1;
 	    }
-	    $action = $act{$action};
+	    $cur{$key} = $act{$value};
 	} elsif ($line =~ /^adminurl\s+/i) {
-	    $url = unquote($POSTMATCH);
-	    $url = undef if $url eq "NONE";
-	} elsif ($line =~ /^default\s+/i) {
-	    $default = unquote($POSTMATCH);
-	    unless (exists $act{$default}) {
-		print STDERR "$file:$lineno: Illegal value: '$default'\n";
-		print STDERR "choose one of ",
-                             join (", ", sort keys %act), "\n";
-		exit 1;
-	    }
-	    $default = $act{$default};
+	    $cur{adminurl} = unquote($POSTMATCH);
+	    $cur{adminurl} = undef if $cur{adminurl} eq "NONE";
 	} elsif ($line =~ /^log\s+/i) {
-	    $logfile = expand_pathname(unquote($POSTMATCH));
+	    $cur{logfile} = expand_pathname(unquote($POSTMATCH));
 	} elsif ($line =~ /^dumpdir\s+/i) {
-	    $dumpdir = expand_pathname(unquote($POSTMATCH));
-	    mkdir($dumpdir) if (defined $dumpdir);
-	} elsif ($line =~ /^subscription_action\s+/) {
-	    $subact = unquote($POSTMATCH);
-	    unless (exists $sact{$subact}) {
-		print STDERR "$file:$lineno: Illegal value: '$subact'\n";
+	    $cur{dumpdir} = expand_pathname(unquote($POSTMATCH));
+	    mkdir($cur{dumpdir}) if (defined $cur{dumpdir});
+	} elsif ($line =~ /^subscription_(action|default)\s+/) {
+	    my $key = "sub" . lc($1);
+	    my $value = unquote($POSTMATCH);
+	    unless (exists $sact{$value}) {
+		print STDERR "$file:$lineno: Illegal value: '$value'\n";
 		print STDERR "choose one of ",
 		             join (", ", sort keys %sact), "\n";
 		exit 1;
 	    }
-	    $subact = $sact{$subact};
-	} elsif ($line =~ /^subscription_default\s+/) {
-	    $subdef = unquote($POSTMATCH);
-	    unless (exists $sact{$subdef}) {
-		print STDERR "$file:$lineno: Illegal value: '$subdef'\n";
-		print STDERR "choose one of ",
-		             join (", ", sort keys %sact), "\n";
-		exit 1;
-	    }
-	    $subdef = $sact{$subdef};
+	    $cur{$key} = $sact{$value};
 	} elsif ($line =~ /^($pattern_keywords)\s+/o) {
 	    my $key = $1;
 	    my $val = $POSTMATCH;
@@ -1218,37 +1199,24 @@ sub read_config {
 		$val =~ s/\\"/"/g;
 		$val =~ s/\\\\/\\/g;
 	    }
-	    $patterns{$key} = ($val eq "NONE") ? undef : $val;
+	    $cur{$key} = ($val eq "NONE") ? undef : $val;
 	} elsif ($line =~ /^spamheader\s+/) {
-	    $spamheader = unquote($POSTMATCH);
-	    unless ($spamheader =~ /^[\w-]+$/) {
+	    $cur{spamheader} = unquote($POSTMATCH);
+	    unless ($cur{spamheader} =~ /^[\w-]+$/) {
 		print STDERR "$file:$lineno: Illegal header name: ".
-			"'$spamheader'\n";
+			"'$cur{spamheader}'\n";
 		exit 1;
 	    }
-	    $spamheader = undef if $spamheader eq "default";
+	    $cur{spamheader} = undef if $cur{spamheader} eq "default";
 	} elsif ($line =~ /^([^@ \t]+@[^@])+\s*/) {
-	    $conf->{$line} = { "user" => $user,
-			       "password" => $pw,
-			       "adminurl" => $url,
-			       "spamlevel" => $spam,
-			       "confirm" => $confirm,
-			       "subact" => $subact,
-			       "subdef" => $subdef,
-			       "action" => $action,
-			       "default" => $default,
-			       "logfile" => $logfile,
-			       "dumpdir" => $dumpdir,
-			       "spamheader" => $spamheader,
-			       "unprintable" => $unprintable,
-			       %patterns,
-			       "order" => ++$count,
-			   };
+	    my %copy = %cur;
+	    $copy{order} = ++$count;
+	    $conf->{$line} = \%copy;
 	} elsif ($line =~ /^unprintable\s+/) {
-	    $unprintable = unquote($POSTMATCH);
-	    unless ($unprintable =~ /^(questionmark|unicode)$/) {
+	    $cur{unprintable} = unquote($POSTMATCH);
+	    unless ($cur{unprintable} =~ /^(questionmark|unicode)$/) {
 		print STDERR "$file:$lineno: Illegal format for ".
-			"unprintable characters: '$unprintable'\n";
+			"unprintable characters: '$cur{unprintable}'\n";
 		exit 1;
 	    }
 	} else {
@@ -1432,12 +1400,15 @@ sub add_subscribers {
 
     die unless @addresses;
 
+    fetch_meta_members($list, $config);
+
     my %params = (username => $config->{user},
 		  adminpw => $config->{password},
 		  subscribe_or_invite => 0,                # Mailman 2.x
 		  send_notifications_to_list_owner => 0,   # Mailman 2.x
 		  send_welcome_message_to_this_batch => 0, # Mailman 2.x
 		  send_welcome_msg_to_this_batch => 0,     # Mailman 1.2
+		  meta_members => $config->{meta_members}, # Mailman 1.2
 		  subscribees => join("\n", @addresses));
     my $url = mailman_url($list, $config->{adminurl}, "", "members");
     my $resp = $ua->post($url, \%params);
@@ -1467,6 +1438,7 @@ sub add_subscribers {
 	%params = (username => $config->{user},
 		   adminpw => $config->{password},
 		   user => \@addresses,
+		   meta_members => $config->{meta_members}, # Mailman 1.2
 		   setmemberopts_btn => "submit");	# Mailman 2.x
 	for my $a (@addresses) {
 	    $params{$a . "_nomail"} = "on" unless $mail;
@@ -1482,6 +1454,8 @@ sub add_subscribers {
 sub remove_subscribers {
     my ($list, $config, @addresses) = @_;
 
+    fetch_meta_members($list, $config);
+
     my $url = mailman_url($list, $config->{adminurl}, "", "members");
 
     # In Mailman 1.2, unsubscription happens when an address is
@@ -1490,6 +1464,7 @@ sub remove_subscribers {
     my %params = (username => $config->{user},
 		  adminpw => $config->{password},
 		  setmemberopts_btn => "submit",	# Mailman 2.x
+		  meta_members => $config->{meta_members}, # Mailman 1.2
 		  user => \@addresses);
     for my $a (@addresses) {
 	$params{$a . "_unsub"} = "on";			# Mailman 2.x
@@ -1546,9 +1521,11 @@ sub parse_subscribe_response {
 sub list_subscribers {
     my ($list, $config) = @_;
 
+    fetch_meta_members($list, $config);
     my $url = mailman_url($list, $config->{adminurl}, "", "members");
     my %params = (username => $config->{user},
 		  adminpw => $config->{password},
+		  meta_members => $config->{meta_members},
 		  chunk => 0);
     my $resp = $ua->post($url, \%params);
     unless ($resp->is_success) {
@@ -1622,7 +1599,50 @@ sub list_subscribers {
 	    $resp = $ua->post("$url?letter=$letter&chunk=$chunk", \%params);
 	}
     }
+    if ($config->{meta_members}) {
+	push(@addresses, split(/\n+/, $config->{meta_members}));
+    }
     return @addresses;
+}
+
+# This code is only useful on the patched Mailman 1.2 installation at
+# UiO.  Notice that it uses GET without any parameters to fetch the
+# page, since otherwise it will clear the meta members.
+# Unfortunately, this means we need to use cookies to log in, and this
+# requires a new Perl module, WWW::Mechanize.  Since this is such a
+# site specific feature, we hide the requirement so listadmin runs
+# even without the module.
+
+sub fetch_meta_members {
+    my ($list, $config) = @_;
+
+    return if defined $config->{meta_members}; # already fetched
+    return unless $config->{meta_member_support} || $list =~ /\buio\.no$/i;
+
+    # We will only attempt this once, so make a note we've tried.
+    $config->{meta_members} = "";
+
+    unless (eval "require WWW::Mechanize; 1") {
+	print "WARNING: Meta members may be removed, install WWW::Mechanize\n";
+	return;
+    }
+
+    my $agent = WWW::Mechanize->new(autocheck => 1);
+    $agent->get(mailman_url($list, $config->{adminurl}));
+    $agent->submit_form(fields => { username => $config->{user},
+				    adminpw => $config->{password}});
+
+    $agent->get(mailman_url($list, $config->{adminurl}, "", "members"));
+
+    my $page = $agent->content();
+    my $parse = HTML::TokeParser->new(\$page);
+    my $tag = $parse->get_tag("textarea");
+    $tag = $parse->get_tag("textarea");
+    return unless defined $tag; # silently ignore the failure
+
+    if ($tag->[1]->{name} eq "meta_members") {
+	$config->{meta_members} = $parse->get_trimmed_text("/textarea");
+    }
 }
 
 sub remove_matching_subscribers {
